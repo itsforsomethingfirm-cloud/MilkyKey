@@ -1,22 +1,56 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const KEYS_FILE = path.join(__dirname, 'keys.json');
 
 // Enable JSON body parsing for HWID validation requests
 app.use(express.json());
 
-// In-memory key store:
-// activeKeys[KEY] = { expireTime: number, boundHWID: string | null }
+// ============================================
+// 💾 PERSISTENT KEY STORAGE SYSTEM
+// ============================================
 let activeKeys = {};
 
-// Root check
+// Load saved keys from keys.json if file exists
+function loadKeys() {
+    if (fs.existsSync(KEYS_FILE)) {
+        try {
+            const data = fs.readFileSync(KEYS_FILE, 'utf8');
+            activeKeys = JSON.parse(data);
+            console.log('[MILKY HUB] Loaded existing keys from storage.');
+        } catch (err) {
+            console.error('[MILKY HUB] Failed to load keys.json:', err);
+            activeKeys = {};
+        }
+    }
+}
+
+// Save active keys to keys.json
+function saveKeys() {
+    try {
+        fs.writeFileSync(KEYS_FILE, JSON.stringify(activeKeys, null, 2));
+    } catch (err) {
+        console.error('[MILKY HUB] Failed to save keys.json:', err);
+    }
+}
+
+// Initialize key storage
+loadKeys();
+
+// ============================================
+// 🌐 SERVER API ENDPOINTS
+// ============================================
+
+// Root status check
 app.get('/', (req, res) => {
     res.send('🥛 Milky Hub Key & HWID Server is Active!');
 });
 
-// Rayfield raw text key list (For basic check)
+// Rayfield raw text key list (For base verification)
 app.get('/keys.txt', (req, res) => {
     const now = Date.now();
     const validKeys = Object.keys(activeKeys).filter(key => activeKeys[key].expireTime > now);
@@ -43,6 +77,7 @@ app.post('/verify-hwid', (req, res) => {
     // First time use: Bind HWID to Key
     if (!keyData.boundHWID) {
         keyData.boundHWID = hwid;
+        saveKeys(); // Save binding to storage
         console.log(`[MILKY HUB] Key ${key} bound to HWID: ${hwid}`);
         return res.json({ success: true, message: "Key validated and bound to your device!" });
     }
@@ -57,10 +92,12 @@ app.post('/verify-hwid', (req, res) => {
 
 app.listen(PORT, () => console.log(`[MILKY HUB] Server running on port ${PORT}`));
 
-// Discord Bot Setup
+// ============================================
+// 🤖 DISCORD BOT CONFIGURATION
+// ============================================
+
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-// OPTIONAL: Put your personal Discord User ID here to grant yourself master access
 const OWNER_DISCORD_ID = process.env.OWNER_ID || "";
 
 if (!TOKEN || !CLIENT_ID) {
@@ -70,12 +107,12 @@ if (!TOKEN || !CLIENT_ID) {
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-// Slash Command with Administrator Default Permission
+// Register Slash Command (Restricted to Administrators by default)
 const commands = [
     new SlashCommandBuilder()
         .setName('key')
         .setDescription('Generate a key (Owner/Admin Only)')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) // Restricts command visibility to admins
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .addIntegerOption(option => 
             option.setName('hours')
                 .setDescription('Duration in hours (e.g. 24)')
@@ -94,11 +131,12 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
     }
 })();
 
+// Command Handler
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.commandName === 'key') {
-        // OWNER / ADMIN CHECK
+        // OWNER / ADMIN PERMISSION CHECK
         const isOwner = OWNER_DISCORD_ID && interaction.user.id === OWNER_DISCORD_ID;
         const isAdmin = interaction.memberPermissions && interaction.memberPermissions.has(PermissionFlagsBits.Administrator);
 
@@ -120,6 +158,9 @@ client.on('interactionCreate', async interaction => {
             expireTime: expireTimestamp,
             boundHWID: null
         };
+
+        // Save new key to file
+        saveKeys();
 
         await interaction.reply({
             content: `🥛 **Key Generated:** \`${generatedKey}\`\n⏱️ **Expires in:** ${hours} hour(s)\n🔒 **HWID Lock:** Single-device activation enabled.`,
