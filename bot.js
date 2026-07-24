@@ -1,21 +1,20 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const KEYS_FILE = path.join(__dirname, 'keys.json');
 
-// Enable JSON body parsing for HWID validation requests
 app.use(express.json());
 
 // ============================================
-// 💾 PERSISTENT KEY STORAGE SYSTEM
+// 💾 PERSISTENT KEY STORAGE
 // ============================================
 let activeKeys = {};
 
-// Load saved keys from keys.json if file exists
 function loadKeys() {
     if (fs.existsSync(KEYS_FILE)) {
         try {
@@ -29,7 +28,6 @@ function loadKeys() {
     }
 }
 
-// Save active keys to keys.json
 function saveKeys() {
     try {
         fs.writeFileSync(KEYS_FILE, JSON.stringify(activeKeys, null, 2));
@@ -38,28 +36,46 @@ function saveKeys() {
     }
 }
 
-// Initialize key storage
 loadKeys();
 
+// Helper: Clean up expired keys periodically
+function purgeExpiredKeys() {
+    const now = Date.now();
+    let changed = false;
+    for (const key in activeKeys) {
+        if (activeKeys[key].expireTime <= now) {
+            delete activeKeys[key];
+            changed = true;
+        }
+    }
+    if (changed) saveKeys();
+}
+setInterval(purgeExpiredKeys, 5 * 60 * 1000); // Check every 5 minutes
+
 // ============================================
-// 🌐 SERVER API ENDPOINTS
+// 🌐 SERVER ENDPOINTS
 // ============================================
 
-// Root status check
 app.get('/', (req, res) => {
     res.send('🥛 Milky Hub Key & HWID Server is Active!');
 });
 
-// Rayfield raw text key list (For base verification)
+// Ping endpoint for keep-alive
+app.get('/ping', (req, res) => {
+    res.status(200).send('PONG');
+});
+
+// Raw key list for Rayfield verification
 app.get('/keys.txt', (req, res) => {
-    const now = Date.now();
-    const validKeys = Object.keys(activeKeys).filter(key => activeKeys[key].expireTime > now);
+    purgeExpiredKeys();
+    const validKeys = Object.keys(activeKeys);
     res.type('text/plain');
     res.send(validKeys.join('\n'));
 });
 
-// Endpoint for HWID Binding & Verification from Roblox
+// HWID Verification Endpoint
 app.post('/verify-hwid', (req, res) => {
+    purgeExpiredKeys();
     const { key, hwid } = req.body;
     const now = Date.now();
 
@@ -69,20 +85,19 @@ app.post('/verify-hwid', (req, res) => {
 
     const keyData = activeKeys[key];
 
-    // Check if key exists and is valid
     if (!keyData || keyData.expireTime <= now) {
         return res.status(401).json({ success: false, message: "Invalid or expired key." });
     }
 
-    // First time use: Bind HWID to Key
+    // First time use: Bind HWID
     if (!keyData.boundHWID) {
         keyData.boundHWID = hwid;
-        saveKeys(); // Save binding to storage
+        saveKeys();
         console.log(`[MILKY HUB] Key ${key} bound to HWID: ${hwid}`);
         return res.json({ success: true, message: "Key validated and bound to your device!" });
     }
 
-    // Subsequent uses: Verify matching HWID
+    // Subsequent uses: Check HWID match
     if (keyData.boundHWID === hwid) {
         return res.json({ success: true, message: "Access granted!" });
     } else {
@@ -90,10 +105,24 @@ app.post('/verify-hwid', (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(`[MILKY HUB] Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`[MILKY HUB] Server running on port ${PORT}`);
+    
+    // Self-ping to keep Render instance awake (every 10 minutes)
+    const SERVER_URL = process.env.RENDER_EXTERNAL_URL;
+    if (SERVER_URL) {
+        setInterval(() => {
+            https.get(`${SERVER_URL}/ping`, (res) => {
+                console.log(`[MILKY HUB] Self-ping status: ${res.statusCode}`);
+            }).on('error', (err) => {
+                console.error('[MILKY HUB] Self-ping failed:', err.message);
+            });
+        }, 10 * 60 * 1000);
+    }
+});
 
 // ============================================
-// 🤖 DISCORD BOT CONFIGURATION
+// 🤖 DISCORD BOT
 // ============================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -101,22 +130,36 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const OWNER_DISCORD_ID = process.env.OWNER_ID || "";
 
 if (!TOKEN || !CLIENT_ID) {
-    console.error("❌ ERROR: Missing DISCORD_TOKEN or CLIENT_ID environment variables!");
+    console.error("❌ ERROR: Missing DISCORD_TOKEN or CLIENT_ID!");
     process.exit(1);
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-// Register Slash Command (Restricted to Administrators by default)
 const commands = [
     new SlashCommandBuilder()
         .setName('key')
-        .setDescription('Generate a key (Owner/Admin Only)')
+        .setDescription('Generate a single key (Owner/Admin Only)')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addIntegerOption(option => 
-            option.setName('hours')
-                .setDescription('Duration in hours (e.g. 24)')
-                .setRequired(true))
+        .addIntegerOption(opt => opt.setName('hours').setDescription('Duration in hours').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('bulkkey')
+        .setDescription('Generate multiple keys at once')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addIntegerOption(opt => opt.setName('hours').setDescription('Duration in hours').setRequired(true))
+        .addIntegerOption(opt => opt.setName('amount').setDescription('Number of keys (1-25)').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('deletekey')
+        .setDescription('Revoke an existing key')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addStringOption(opt => opt.setName('key').setDescription('The key code to delete').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('stats')
+        .setDescription('View active keys and server statistics')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -125,47 +168,95 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
         console.log('[MILKY HUB] Registering Slash Commands...');
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('[MILKY HUB] Slash command /key registered!');
+        console.log('[MILKY HUB] Commands registered successfully!');
     } catch (error) {
         console.error('[MILKY HUB] Command registration failed:', error);
     }
 })();
 
-// Command Handler
+// Helper to generate key string
+function generateKeyString() {
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    return `MILKY-${code}`;
+}
+
+// Interaction Handler
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
-    if (interaction.commandName === 'key') {
-        // OWNER / ADMIN PERMISSION CHECK
-        const isOwner = OWNER_DISCORD_ID && interaction.user.id === OWNER_DISCORD_ID;
-        const isAdmin = interaction.memberPermissions && interaction.memberPermissions.has(PermissionFlagsBits.Administrator);
+    const isOwner = OWNER_DISCORD_ID && interaction.user.id === OWNER_DISCORD_ID;
+    const isAdmin = interaction.memberPermissions && interaction.memberPermissions.has(PermissionFlagsBits.Administrator);
 
-        if (!isOwner && !isAdmin) {
-            return interaction.reply({
-                content: "❌ **Access Denied:** Only the owner or server administrators can generate keys!",
-                ephemeral: true
-            });
-        }
+    if (!isOwner && !isAdmin) {
+        return interaction.reply({ content: "❌ Only administrators can use this command!", ephemeral: true });
+    }
 
+    const { commandName } = interaction;
+
+    // Single Key Command
+    if (commandName === 'key') {
         const hours = interaction.options.getInteger('hours');
-        const randomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const generatedKey = `MILKY-${randomCode}`;
-        
+        const key = generateKeyString();
         const expireTimestamp = Date.now() + (hours * 60 * 60 * 1000);
-        
-        // Store key with null boundHWID
-        activeKeys[generatedKey] = {
-            expireTime: expireTimestamp,
-            boundHWID: null
-        };
 
-        // Save new key to file
+        activeKeys[key] = { expireTime: expireTimestamp, boundHWID: null };
         saveKeys();
 
-        await interaction.reply({
-            content: `🥛 **Key Generated:** \`${generatedKey}\`\n⏱️ **Expires in:** ${hours} hour(s)\n🔒 **HWID Lock:** Single-device activation enabled.`,
+        return interaction.reply({
+            content: `🥛 **Key Generated:** \`${key}\`\n⏱️ **Duration:** ${hours} hour(s)\n🔒 **HWID Lock:** Single-device activation enabled.`,
             ephemeral: true
         });
+    }
+
+    // Bulk Key Command
+    if (commandName === 'bulkkey') {
+        const hours = interaction.options.getInteger('hours');
+        const amount = Math.min(Math.max(interaction.options.getInteger('amount'), 1), 25);
+        const expireTimestamp = Date.now() + (hours * 60 * 60 * 1000);
+        const generatedList = [];
+
+        for (let i = 0; i < amount; i++) {
+            const key = generateKeyString();
+            activeKeys[key] = { expireTime: expireTimestamp, boundHWID: null };
+            generatedList.push(`\`${key}\``);
+        }
+        saveKeys();
+
+        return interaction.reply({
+            content: `🥛 **${amount} Keys Generated (${hours} hours each):**\n${generatedList.join('\n')}`,
+            ephemeral: true
+        });
+    }
+
+    // Delete Key Command
+    if (commandName === 'deletekey') {
+        const targetKey = interaction.options.getString('key').trim();
+        if (activeKeys[targetKey]) {
+            delete activeKeys[targetKey];
+            saveKeys();
+            return interaction.reply({ content: `✅ Key \`${targetKey}\` has been revoked and deleted.`, ephemeral: true });
+        } else {
+            return interaction.reply({ content: `❌ Key \`${targetKey}\` not found in database.`, ephemeral: true });
+        }
+    }
+
+    // Stats Command
+    if (commandName === 'stats') {
+        purgeExpiredKeys();
+        const totalKeys = Object.keys(activeKeys).length;
+        const boundKeys = Object.values(activeKeys).filter(k => k.boundHWID !== null).length;
+
+        const embed = new EmbedBuilder()
+            .setTitle('🥛 Milky Hub Key Stats')
+            .setColor('#4287f5')
+            .addFields(
+                { name: '🔑 Active Keys', value: `${totalKeys}`, inline: true },
+                { name: '🔒 Bound Devices', value: `${boundKeys}`, inline: true },
+                { name: '🟢 Server Status', value: 'Online & Active', inline: true }
+            )
+            .setTimestamp();
+
+        return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 });
 
