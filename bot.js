@@ -1,51 +1,84 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const express = require('express');
 
-// Express App to serve keys to Rayfield
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Temporary in-memory key storage: { "KEY_STRING": expirationTimestamp }
+// Enable JSON body parsing for HWID validation requests
+app.use(express.json());
+
+// In-memory key store:
+// activeKeys[KEY] = { expireTime: number, boundHWID: string | null }
 let activeKeys = {};
 
-// Root route check
+// Root check
 app.get('/', (req, res) => {
-    res.send('🥛 Milky Hub Key Server is active!');
+    res.send('🥛 Milky Hub Key & HWID Server is Active!');
 });
 
-// Endpoint that Rayfield checks for valid keys
+// Rayfield raw text key list (For basic check)
 app.get('/keys.txt', (req, res) => {
     const now = Date.now();
-    
-    // Filter out expired keys automatically
-    const validKeys = Object.keys(activeKeys).filter(key => activeKeys[key] > now);
-    
-    // Return keys separated by newlines
+    const validKeys = Object.keys(activeKeys).filter(key => activeKeys[key].expireTime > now);
     res.type('text/plain');
     res.send(validKeys.join('\n'));
 });
 
+// Endpoint for HWID Binding & Verification from Roblox
+app.post('/verify-hwid', (req, res) => {
+    const { key, hwid } = req.body;
+    const now = Date.now();
+
+    if (!key || !hwid) {
+        return res.status(400).json({ success: false, message: "Missing key or HWID." });
+    }
+
+    const keyData = activeKeys[key];
+
+    // Check if key exists and is valid
+    if (!keyData || keyData.expireTime <= now) {
+        return res.status(401).json({ success: false, message: "Invalid or expired key." });
+    }
+
+    // First time use: Bind HWID to Key
+    if (!keyData.boundHWID) {
+        keyData.boundHWID = hwid;
+        console.log(`[MILKY HUB] Key ${key} bound to HWID: ${hwid}`);
+        return res.json({ success: true, message: "Key validated and bound to your device!" });
+    }
+
+    // Subsequent uses: Verify matching HWID
+    if (keyData.boundHWID === hwid) {
+        return res.json({ success: true, message: "Access granted!" });
+    } else {
+        return res.status(403).json({ success: false, message: "This key is bound to another device!" });
+    }
+});
+
 app.listen(PORT, () => console.log(`[MILKY HUB] Server running on port ${PORT}`));
 
-// Discord Bot Configuration (Uses environment variables set on Render/Koyeb)
+// Discord Bot Setup
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+// OPTIONAL: Put your personal Discord User ID here to grant yourself master access
+const OWNER_DISCORD_ID = process.env.OWNER_ID || "";
 
 if (!TOKEN || !CLIENT_ID) {
-    console.error("❌ ERROR: DISCORD_TOKEN or CLIENT_ID environment variables are missing!");
+    console.error("❌ ERROR: Missing DISCORD_TOKEN or CLIENT_ID environment variables!");
     process.exit(1);
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-// Register Slash Command
+// Slash Command with Administrator Default Permission
 const commands = [
     new SlashCommandBuilder()
         .setName('key')
-        .setDescription('Generate a key for Milky Hub')
+        .setDescription('Generate a key (Owner/Admin Only)')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator) // Restricts command visibility to admins
         .addIntegerOption(option => 
             option.setName('hours')
-                .setDescription('Duration of the key in hours (e.g., 24)')
+                .setDescription('Duration in hours (e.g. 24)')
                 .setRequired(true))
 ];
 
@@ -53,32 +86,44 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
     try {
-        console.log('[MILKY HUB] Registering slash commands...');
+        console.log('[MILKY HUB] Registering Slash Commands...');
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('[MILKY HUB] Slash command /key registered successfully!');
+        console.log('[MILKY HUB] Slash command /key registered!');
     } catch (error) {
-        console.error('[MILKY HUB] Error registering commands:', error);
+        console.error('[MILKY HUB] Command registration failed:', error);
     }
 })();
 
-// Command Listener
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.commandName === 'key') {
+        // OWNER / ADMIN CHECK
+        const isOwner = OWNER_DISCORD_ID && interaction.user.id === OWNER_DISCORD_ID;
+        const isAdmin = interaction.memberPermissions && interaction.memberPermissions.has(PermissionFlagsBits.Administrator);
+
+        if (!isOwner && !isAdmin) {
+            return interaction.reply({
+                content: "❌ **Access Denied:** Only the owner or server administrators can generate keys!",
+                ephemeral: true
+            });
+        }
+
         const hours = interaction.options.getInteger('hours');
-        
-        // Generate random key (e.g. MILKY-8X92A1)
         const randomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
         const generatedKey = `MILKY-${randomCode}`;
         
-        // Set expiration time
         const expireTimestamp = Date.now() + (hours * 60 * 60 * 1000);
-        activeKeys[generatedKey] = expireTimestamp;
+        
+        // Store key with null boundHWID
+        activeKeys[generatedKey] = {
+            expireTime: expireTimestamp,
+            boundHWID: null
+        };
 
         await interaction.reply({
-            content: `🥛 **Your Milky Hub Key:** \`${generatedKey}\`\n⏱️ **Expires in:** ${hours} hour(s)\n\nPaste this key into the Rayfield prompt when running the script!`,
-            ephemeral: true // Only the command executor can see this
+            content: `🥛 **Key Generated:** \`${generatedKey}\`\n⏱️ **Expires in:** ${hours} hour(s)\n🔒 **HWID Lock:** Single-device activation enabled.`,
+            ephemeral: true
         });
     }
 });
