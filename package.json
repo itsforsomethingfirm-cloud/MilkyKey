@@ -1,0 +1,13 @@
+{
+  "name": "milky-hub-key-bot",
+  "version": "1.0.0",
+  "description": "Discord Key Bot and API for Milky Hub",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.0",
+    "express": "^4.19.2"
+  }
+}
