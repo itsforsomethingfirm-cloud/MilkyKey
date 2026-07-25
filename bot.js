@@ -25,9 +25,10 @@ const client = new Client({
     intents: [ GatewayIntentBits.Guilds ] 
 });
 
-// Helper setting to enable User Profile + Server usage for every command
+// Helper setting: Unlocks commands for EVERYONE and enables User Profile installation
 const userAppConfig = (builder) => {
     return builder
+        .setDefaultMemberPermissions(null) // 🔓 REMOVES ADMIN REQUIREMENT FOR EVERYONE
         .setIntegrationTypes([
             ApplicationIntegrationType.UserInstall, 
             ApplicationIntegrationType.GuildInstall
@@ -44,19 +45,13 @@ const userAppConfig = (builder) => {
 // ============================================
 
 const commands = [
-    // 1. Repeater
+    // 1. Message Repeater
     userAppConfig(
         new SlashCommandBuilder()
             .setName('msg')
-            .setDescription('Repeats a message using interaction responses')
-            .addStringOption(opt => 
-                opt.setName('text')
-                   .setDescription('The message to send')
-                   .setRequired(true))
-            .addIntegerOption(opt => 
-                opt.setName('count')
-                   .setDescription('Number of times to repeat (1-5)')
-                   .setRequired(false))
+            .setDescription('Repeats a message multiple times')
+            .addStringOption(opt => opt.setName('text').setDescription('The message to send').setRequired(true))
+            .addIntegerOption(opt => opt.setName('count').setDescription('Repeats (1-5)').setRequired(false))
     ),
 
     // 2. Embed Builder
@@ -64,32 +59,23 @@ const commands = [
         new SlashCommandBuilder()
             .setName('embed')
             .setDescription('Send a clean styled embed message')
-            .addStringOption(opt => 
-                opt.setName('title')
-                   .setDescription('Title of the embed')
-                   .setRequired(true))
-            .addStringOption(opt => 
-                opt.setName('description')
-                   .setDescription('Description body')
-                   .setRequired(true))
+            .addStringOption(opt => opt.setName('title').setDescription('Embed title').setRequired(true))
+            .addStringOption(opt => opt.setName('description').setDescription('Embed text').setRequired(true))
     ),
 
-    // 3. Poll Creator
+    // 3. Poll
     userAppConfig(
         new SlashCommandBuilder()
             .setName('poll')
-            .setDescription('Start a quick yes/no poll')
-            .addStringOption(opt => 
-                opt.setName('question')
-                   .setDescription('What do you want to ask?')
-                   .setRequired(true))
+            .setDescription('Start a quick vote')
+            .addStringOption(opt => opt.setName('question').setDescription('Poll topic').setRequired(true))
     ),
 
     // 4. Coinflip
     userAppConfig(
         new SlashCommandBuilder()
             .setName('coinflip')
-            .setDescription('Flip a coin anywhere in Discord')
+            .setDescription('Flip a coin')
     ),
 
     // 5. Dice Roll
@@ -97,10 +83,7 @@ const commands = [
         new SlashCommandBuilder()
             .setName('roll')
             .setDescription('Roll a random number')
-            .addIntegerOption(opt => 
-                opt.setName('max')
-                   .setDescription('Maximum number (Default: 100)')
-                   .setRequired(false))
+            .addIntegerOption(opt => opt.setName('max').setDescription('Max number (Default 100)').setRequired(false))
     ),
 
     // 6. User Avatar
@@ -108,51 +91,95 @@ const commands = [
         new SlashCommandBuilder()
             .setName('avatar')
             .setDescription('Get a user\'s profile picture')
-            .addUserOption(opt => 
-                opt.setName('target')
-                   .setDescription('Select a user')
-                   .setRequired(false))
+            .addUserOption(opt => opt.setName('target').setDescription('Select user').setRequired(false))
     ),
 
-    // 7. Ping / Latency
+    // 7. Ping
     userAppConfig(
         new SlashCommandBuilder()
             .setName('ping')
-            .setDescription('Check bot status and response time')
+            .setDescription('Check latency')
     ),
 
-    // 8. 8Ball (NEW)
+    // 8. 8Ball
     userAppConfig(
         new SlashCommandBuilder()
             .setName('8ball')
-            .setDescription('Ask the magic 8-ball a question')
-            .addStringOption(opt => 
-                opt.setName('question')
-                   .setDescription('Your question')
-                   .setRequired(true))
+            .setDescription('Ask a question to the magic 8-ball')
+            .addStringOption(opt => opt.setName('question').setDescription('Your question').setRequired(true))
     ),
 
-    // 9. Choice Picker (NEW)
+    // 9. Choice Picker
     userAppConfig(
         new SlashCommandBuilder()
             .setName('choose')
-            .setDescription('Pick randomly between options (separated by commas)')
+            .setDescription('Pick between options (comma separated)')
+            .addStringOption(opt => opt.setName('options').setDescription('e.g. Pizza, Burgers, Tacos').setRequired(true))
+    ),
+
+    // 10. NEW: Meme Fetcher
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('meme')
+            .setDescription('Get a random meme from Reddit')
+    ),
+
+    // 11. NEW: Rock Paper Scissors
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('rps')
+            .setDescription('Play Rock, Paper, Scissors')
             .addStringOption(opt => 
-                opt.setName('options')
-                   .setDescription('e.g. Pizza, Burgers, Tacos')
-                   .setRequired(true))
+                opt.setName('choice')
+                   .setDescription('Select your move')
+                   .setRequired(true)
+                   .addChoices(
+                       { name: '🪨 Rock', value: 'rock' },
+                       { name: '📄 Paper', value: 'paper' },
+                       { name: '✂️ Scissors', value: 'scissors' }
+                   ))
+    ),
+
+    // 12. NEW: User Info
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('userinfo')
+            .setDescription('Get detailed info about a user profile')
+            .addUserOption(opt => opt.setName('target').setDescription('Target user').setRequired(false))
+    ),
+
+    // 13. NEW: Server Info
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('serverinfo')
+            .setDescription('Get details about the current server')
+    ),
+
+    // 14. NEW: Random Cat
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('cat')
+            .setDescription('Get a random cute cat photo')
+    ),
+
+    // 15. NEW: Random Dog
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('dog')
+            .setDescription('Get a random cute dog photo')
     )
 ].map(cmd => cmd.toJSON());
 
+// Force overwrite slash commands on startup
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
     try {
-        console.log('🔄 Registering global user-app slash commands...');
+        console.log('🔄 Overwriting old commands & unlocking all admin restrictions...');
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('✅ All slash commands registered successfully!');
+        console.log('✅ All commands updated and unlocked successfully!');
     } catch (error) {
-        console.error('❌ Failed to register slash commands:', error);
+        console.error('❌ Error updating slash commands:', error);
     }
 })();
 
@@ -254,7 +281,6 @@ client.on('interactionCreate', async interaction => {
             '🎱 Don\'t count on it.', '🎱 My reply is no.', '🎱 Very doubtful.'
         ];
         const answer = responses[Math.floor(Math.random() * responses.length)];
-        
         return interaction.reply({ content: `**Q:** ${question}\n**A:** ${answer}` });
     }
 
@@ -264,11 +290,115 @@ client.on('interactionCreate', async interaction => {
         const choices = optionsRaw.split(',').map(c => c.trim()).filter(c => c.length > 0);
 
         if (choices.length < 2) {
-            return interaction.reply({ content: '❌ Please provide at least 2 choices separated by commas!', ephemeral: true });
+            return interaction.reply({ content: '❌ Please enter at least 2 options separated by commas!', ephemeral: true });
         }
 
         const pick = choices[Math.floor(Math.random() * choices.length)];
         return interaction.reply({ content: `🤔 I choose: **${pick}**` });
+    }
+
+    // --- /meme ---
+    if (commandName === 'meme') {
+        await interaction.deferReply();
+        try {
+            const res = await fetch('https://meme-api.com/gimme');
+            const data = await res.json();
+
+            const embed = new EmbedBuilder()
+                .setTitle(data.title)
+                .setURL(data.postLink)
+                .setImage(data.url)
+                .setColor('#FF4500')
+                .setFooter({ text: `👍 ${data.ups} | r/${data.subreddit}` });
+
+            return interaction.editReply({ embeds: [embed] });
+        } catch (err) {
+            return interaction.editReply({ content: '❌ Failed to fetch meme from Reddit API.' });
+        }
+    }
+
+    // --- /rps ---
+    if (commandName === 'rps') {
+        const userChoice = interaction.options.getString('choice');
+        const moves = ['rock', 'paper', 'scissors'];
+        const botChoice = moves[Math.floor(Math.random() * moves.length)];
+
+        let result = "";
+        if (userChoice === botChoice) {
+            result = "🤝 It's a tie!";
+        } else if (
+            (userChoice === 'rock' && botChoice === 'scissors') ||
+            (userChoice === 'paper' && botChoice === 'rock') ||
+            (userChoice === 'scissors' && botChoice === 'paper')
+        ) {
+            result = "🎉 You win!";
+        } else {
+            result = "💻 Bot wins!";
+        }
+
+        return interaction.reply({ 
+            content: `You chose **${userChoice}** | Bot chose **${botChoice}**\n${result}` 
+        });
+    }
+
+    // --- /userinfo ---
+    if (commandName === 'userinfo') {
+        const user = interaction.options.getUser('target') || interaction.user;
+        const embed = new EmbedBuilder()
+            .setTitle(`👤 ${user.tag}`)
+            .setThumbnail(user.displayAvatarURL({ dynamic: true }))
+            .addFields(
+                { name: 'User ID', value: `\`${user.id}\``, inline: true },
+                { name: 'Account Created', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
+                { name: 'Bot Account', value: user.bot ? 'Yes' : 'No', inline: true }
+            )
+            .setColor('#5865F2');
+
+        return interaction.reply({ embeds: [embed] });
+    }
+
+    // --- /serverinfo ---
+    if (commandName === 'serverinfo') {
+        if (!interaction.guild) {
+            return interaction.reply({ content: '❌ This command can only be used inside a server context.', ephemeral: true });
+        }
+
+        const guild = interaction.guild;
+        const embed = new EmbedBuilder()
+            .setTitle(`🏰 ${guild.name}`)
+            .setThumbnail(guild.iconURL({ dynamic: true }))
+            .addFields(
+                { name: 'Server ID', value: `\`${guild.id}\``, inline: true },
+                { name: 'Total Members', value: `\`${guild.memberCount}\``, inline: true },
+                { name: 'Created On', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true }
+            )
+            .setColor('#2ECC71');
+
+        return interaction.reply({ embeds: [embed] });
+    }
+
+    // --- /cat ---
+    if (commandName === 'cat') {
+        await interaction.deferReply();
+        try {
+            const res = await fetch('https://api.thecatapi.com/v1/images/search');
+            const data = await res.json();
+            return interaction.editReply({ content: data[0].url });
+        } catch {
+            return interaction.editReply({ content: '❌ Failed to fetch cat picture!' });
+        }
+    }
+
+    // --- /dog ---
+    if (commandName === 'dog') {
+        await interaction.deferReply();
+        try {
+            const res = await fetch('https://dog.ceo/api/breeds/image/random');
+            const data = await res.json();
+            return interaction.editReply({ content: data.message });
+        } catch {
+            return interaction.editReply({ content: '❌ Failed to fetch dog picture!' });
+        }
     }
 });
 
