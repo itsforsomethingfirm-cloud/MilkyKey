@@ -4,11 +4,13 @@ const {
     REST, 
     Routes, 
     SlashCommandBuilder, 
-    EmbedBuilder 
+    EmbedBuilder,
+    ApplicationIntegrationType,
+    InteractionContextType
 } = require('discord.js');
 
 // ============================================
-// 🤖 BOT INITIALIZATION
+// ⚙️ ENVIRONMENT CONFIGURATION
 // ============================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -20,86 +22,133 @@ if (!TOKEN || !CLIENT_ID) {
 }
 
 const client = new Client({ 
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages
-    ] 
+    intents: [ GatewayIntentBits.Guilds ] 
 });
 
+// Helper setting to enable User Profile + Server usage for every command
+const userAppConfig = (builder) => {
+    return builder
+        .setIntegrationTypes([
+            ApplicationIntegrationType.UserInstall, 
+            ApplicationIntegrationType.GuildInstall
+        ])
+        .setContexts([
+            InteractionContextType.Guild, 
+            InteractionContextType.BotDM, 
+            InteractionContextType.PrivateChannel
+        ]);
+};
+
 // ============================================
-// 📜 SLASH COMMAND REGISTRATION (PUBLIC USE)
+// 📜 SLASH COMMAND REGISTRATION
 // ============================================
 
 const commands = [
-    // 1. Repeat Message Command
-    new SlashCommandBuilder()
-        .setName('msg')
-        .setDescription('Repeats a specified message')
-        .addStringOption(opt => 
-            opt.setName('text')
-               .setDescription('The message to send')
-               .setRequired(true))
-        .addIntegerOption(opt => 
-            opt.setName('count')
-               .setDescription('Number of times to send (1-5)')
-               .setRequired(false)),
+    // 1. Repeater
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('msg')
+            .setDescription('Repeats a message using interaction responses')
+            .addStringOption(opt => 
+                opt.setName('text')
+                   .setDescription('The message to send')
+                   .setRequired(true))
+            .addIntegerOption(opt => 
+                opt.setName('count')
+                   .setDescription('Number of times to repeat (1-5)')
+                   .setRequired(false))
+    ),
 
     // 2. Embed Builder
-    new SlashCommandBuilder()
-        .setName('embed')
-        .setDescription('Send a custom styled embed message')
-        .addStringOption(opt => 
-            opt.setName('title')
-               .setDescription('Title of the embed')
-               .setRequired(true))
-        .addStringOption(opt => 
-            opt.setName('description')
-               .setDescription('Description body of the embed')
-               .setRequired(true)),
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('embed')
+            .setDescription('Send a clean styled embed message')
+            .addStringOption(opt => 
+                opt.setName('title')
+                   .setDescription('Title of the embed')
+                   .setRequired(true))
+            .addStringOption(opt => 
+                opt.setName('description')
+                   .setDescription('Description body')
+                   .setRequired(true))
+    ),
 
     // 3. Poll Creator
-    new SlashCommandBuilder()
-        .setName('poll')
-        .setDescription('Start a quick community poll')
-        .addStringOption(opt => 
-            opt.setName('question')
-               .setDescription('What do you want to ask?')
-               .setRequired(true)),
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('poll')
+            .setDescription('Start a quick yes/no poll')
+            .addStringOption(opt => 
+                opt.setName('question')
+                   .setDescription('What do you want to ask?')
+                   .setRequired(true))
+    ),
 
     // 4. Coinflip
-    new SlashCommandBuilder()
-        .setName('coinflip')
-        .setDescription('Flip a coin'),
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('coinflip')
+            .setDescription('Flip a coin anywhere in Discord')
+    ),
 
-    // 5. Dice / Random Number Roll
-    new SlashCommandBuilder()
-        .setName('roll')
-        .setDescription('Roll a random number')
-        .addIntegerOption(opt => 
-            opt.setName('max')
-               .setDescription('Maximum number (Default: 100)')
-               .setRequired(false)),
+    // 5. Dice Roll
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('roll')
+            .setDescription('Roll a random number')
+            .addIntegerOption(opt => 
+                opt.setName('max')
+                   .setDescription('Maximum number (Default: 100)')
+                   .setRequired(false))
+    ),
 
     // 6. User Avatar
-    new SlashCommandBuilder()
-        .setName('avatar')
-        .setDescription('Get a user\'s profile picture')
-        .addUserOption(opt => 
-            opt.setName('target')
-               .setDescription('Select a user')
-               .setRequired(false)),
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('avatar')
+            .setDescription('Get a user\'s profile picture')
+            .addUserOption(opt => 
+                opt.setName('target')
+                   .setDescription('Select a user')
+                   .setRequired(false))
+    ),
 
     // 7. Ping / Latency
-    new SlashCommandBuilder()
-        .setName('ping')
-        .setDescription('Check bot status and response time')
-];
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('ping')
+            .setDescription('Check bot status and response time')
+    ),
+
+    // 8. 8Ball (NEW)
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('8ball')
+            .setDescription('Ask the magic 8-ball a question')
+            .addStringOption(opt => 
+                opt.setName('question')
+                   .setDescription('Your question')
+                   .setRequired(true))
+    ),
+
+    // 9. Choice Picker (NEW)
+    userAppConfig(
+        new SlashCommandBuilder()
+            .setName('choose')
+            .setDescription('Pick randomly between options (separated by commas)')
+            .addStringOption(opt => 
+                opt.setName('options')
+                   .setDescription('e.g. Pizza, Burgers, Tacos')
+                   .setRequired(true))
+    )
+].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
     try {
-        console.log('🔄 Registering global slash commands...');
+        console.log('🔄 Registering global user-app slash commands...');
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
         console.log('✅ All slash commands registered successfully!');
     } catch (error) {
@@ -108,12 +157,12 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 })();
 
 // ============================================
-// ⚡ INTERACTION HANDLERS
+// ⚡ INTERACTION HANDLER
 // ============================================
 
 client.on('ready', () => {
     console.log(`🤖 Logged in as ${client.user.tag}!`);
-    client.user.setActivity('with utility commands | /msg', { type: 0 });
+    client.user.setActivity('User App Mode | /msg', { type: 0 });
 });
 
 client.on('interactionCreate', async interaction => {
@@ -125,14 +174,13 @@ client.on('interactionCreate', async interaction => {
     if (commandName === 'msg') {
         const text = interaction.options.getString('text');
         const rawCount = interaction.options.getInteger('count') || 1;
-        // Cap count between 1 and 5 to prevent API rate-limit issues
         const count = Math.min(Math.max(rawCount, 1), 5);
 
-        await interaction.reply({ content: `Sending message ${count} time(s)...`, ephemeral: true });
+        await interaction.reply({ content: text });
 
-        for (let i = 0; i < count; i++) {
-            await interaction.channel.send(text);
-            if (i < count - 1) await new Promise(r => setTimeout(r, 1000)); // 1 sec delay
+        for (let i = 1; i < count; i++) {
+            await new Promise(r => setTimeout(r, 1000));
+            await interaction.followUp({ content: text });
         }
     }
 
@@ -156,21 +204,19 @@ client.on('interactionCreate', async interaction => {
         const question = interaction.options.getString('question');
 
         const embed = new EmbedBuilder()
-            .setTitle('📊 Community Poll')
-            .setDescription(question)
+            .setTitle('📊 Quick Poll')
+            .setDescription(`${question}\n\n👍 = Yes | 👎 = No`)
             .setColor('#FEE75C')
             .setFooter({ text: `Asked by ${interaction.user.tag}` })
             .setTimestamp();
 
-        const message = await interaction.reply({ embeds: [embed], fetchReply: true });
-        await message.react('👍');
-        await message.react('👎');
+        return interaction.reply({ embeds: [embed] });
     }
 
     // --- /coinflip ---
     if (commandName === 'coinflip') {
-        const result = Math.random() < 0.5 ? '🪙 **Heads!**' : '🪙 **Tails!**';
-        return interaction.reply({ content: result });
+        const outcome = Math.random() < 0.5 ? '🪙 **Heads!**' : '🪙 **Tails!**';
+        return interaction.reply({ content: outcome });
     }
 
     // --- /roll ---
@@ -197,6 +243,32 @@ client.on('interactionCreate', async interaction => {
     if (commandName === 'ping') {
         const ping = Date.now() - interaction.createdTimestamp;
         return interaction.reply({ content: `🏓 Pong! Latency: \`${ping}ms\` | API Latency: \`${Math.round(client.ws.ping)}ms\`` });
+    }
+
+    // --- /8ball ---
+    if (commandName === '8ball') {
+        const question = interaction.options.getString('question');
+        const responses = [
+            '🎱 It is certain.', '🎱 Without a doubt.', '🎱 Yes - definitely.',
+            '🎱 Reply hazy, try again.', '🎱 Ask again later.',
+            '🎱 Don\'t count on it.', '🎱 My reply is no.', '🎱 Very doubtful.'
+        ];
+        const answer = responses[Math.floor(Math.random() * responses.length)];
+        
+        return interaction.reply({ content: `**Q:** ${question}\n**A:** ${answer}` });
+    }
+
+    // --- /choose ---
+    if (commandName === 'choose') {
+        const optionsRaw = interaction.options.getString('options');
+        const choices = optionsRaw.split(',').map(c => c.trim()).filter(c => c.length > 0);
+
+        if (choices.length < 2) {
+            return interaction.reply({ content: '❌ Please provide at least 2 choices separated by commas!', ephemeral: true });
+        }
+
+        const pick = choices[Math.floor(Math.random() * choices.length)];
+        return interaction.reply({ content: `🤔 I choose: **${pick}**` });
     }
 });
 
