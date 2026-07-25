@@ -8,6 +8,7 @@ const {
     ApplicationIntegrationType,
     InteractionContextType
 } = require('discord.js');
+const http = require('http');
 
 // ============================================
 // ⚙️ ENVIRONMENT CONFIGURATION
@@ -98,7 +99,7 @@ const commands = [
     userAppConfig(
         new SlashCommandBuilder()
             .setName('ping')
-            .setDescription('Check latency')
+            .setDescription('Check bot latency and response time')
     ),
 
     // 8. 8Ball
@@ -117,14 +118,14 @@ const commands = [
             .addStringOption(opt => opt.setName('options').setDescription('e.g. Pizza, Burgers, Tacos').setRequired(true))
     ),
 
-    // 10. NEW: Meme Fetcher
+    // 10. Meme Fetcher
     userAppConfig(
         new SlashCommandBuilder()
             .setName('meme')
             .setDescription('Get a random meme from Reddit')
     ),
 
-    // 11. NEW: Rock Paper Scissors
+    // 11. Rock Paper Scissors
     userAppConfig(
         new SlashCommandBuilder()
             .setName('rps')
@@ -140,7 +141,7 @@ const commands = [
                    ))
     ),
 
-    // 12. NEW: User Info
+    // 12. User Info
     userAppConfig(
         new SlashCommandBuilder()
             .setName('userinfo')
@@ -148,21 +149,21 @@ const commands = [
             .addUserOption(opt => opt.setName('target').setDescription('Target user').setRequired(false))
     ),
 
-    // 13. NEW: Server Info
+    // 13. Server Info
     userAppConfig(
         new SlashCommandBuilder()
             .setName('serverinfo')
             .setDescription('Get details about the current server')
     ),
 
-    // 14. NEW: Random Cat
+    // 14. Random Cat
     userAppConfig(
         new SlashCommandBuilder()
             .setName('cat')
             .setDescription('Get a random cute cat photo')
     ),
 
-    // 15. NEW: Random Dog
+    // 15. Random Dog
     userAppConfig(
         new SlashCommandBuilder()
             .setName('dog')
@@ -187,7 +188,7 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 // ⚡ INTERACTION HANDLER
 // ============================================
 
-client.on('ready', () => {
+client.on('clientReady', () => {
     console.log(`🤖 Logged in as ${client.user.tag}!`);
     client.user.setActivity('User App Mode | /msg', { type: 0 });
 });
@@ -403,3 +404,16 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(TOKEN);
+
+// ============================================
+// 🌐 RENDER PORT BINDING (Fixes "No open ports detected")
+// ============================================
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.write("Bot is alive!");
+    res.end();
+}).listen(PORT, () => {
+    console.log(`🌐 Health check server listening on port ${PORT}`);
+});
