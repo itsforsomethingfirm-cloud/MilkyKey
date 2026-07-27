@@ -12,6 +12,10 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 
+// ============================================
+// ⚙️ ENVIRONMENT CONFIGURATION
+// ============================================
+
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL;
@@ -22,6 +26,7 @@ if (!TOKEN || !CLIENT_ID) {
     process.exit(1);
 }
 
+// Whitelist File Helpers
 function getWhitelist() {
     if (!fs.existsSync(WHITELIST_FILE)) fs.writeFileSync(WHITELIST_FILE, '{}');
     try {
@@ -51,6 +56,10 @@ const userAppConfig = (builder) => {
         ]);
 };
 
+// ============================================
+// 📜 SLASH COMMAND REGISTRATION
+// ============================================
+
 const commands = [
     userAppConfig(
         new SlashCommandBuilder()
@@ -73,21 +82,26 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
     try {
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('✅ Commands synced!');
+        console.log('✅ Commands synced successfully!');
     } catch (error) {
-        console.error('❌ Sync error:', error);
+        console.error('❌ Command sync error:', error);
     }
 })();
+
+// ============================================
+// ⚡ EVENT HANDLERS & RENDER KEEP-ALIVE
+// ============================================
 
 client.on('clientReady', () => {
     console.log(`🤖 Logged in as ${client.user.tag}!`);
     
+    // Auto Keep-Alive (Prevents Render Server Sleep)
     if (RENDER_EXTERNAL_URL) {
         setInterval(() => {
             const pingUrl = `${RENDER_EXTERNAL_URL}/ping`;
             const requester = pingUrl.startsWith('https') ? https : http;
             requester.get(pingUrl, (res) => {
-                console.log(`⚡ Ping status: ${res.statusCode}`);
+                console.log(`⚡ Keep-alive status: ${res.statusCode}`);
             }).on('error', (err) => console.error("Keep-alive error:", err.message));
         }, 10 * 60 * 1000);
     }
@@ -97,12 +111,12 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.commandName === 'verify') {
-        const inputUser = interaction.options.getString('username').trim().toLowerCase();
+        const username = interaction.options.getString('username').trim().toLowerCase();
         const whitelist = getWhitelist();
 
-        const expiresAt = Date.now() + (24 * 60 * 60 * 1000);
+        const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 Hours
 
-        whitelist[inputUser] = {
+        whitelist[username] = {
             discordId: interaction.user.id,
             discordTag: interaction.user.tag,
             expiresAt: expiresAt,
@@ -113,7 +127,7 @@ client.on('interactionCreate', async interaction => {
 
         const embed = new EmbedBuilder()
             .setTitle('✅ Access Granted!')
-            .setDescription(`Roblox user **${inputUser}** whitelisted for **24 hours**.`)
+            .setDescription(`Roblox user **${username}** whitelisted for **24 hours**.`)
             .addFields({ name: 'Expires', value: `<t:${Math.floor(expiresAt / 1000)}:R>` })
             .setColor('#2ECC71');
 
@@ -126,6 +140,10 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(TOKEN);
+
+// ============================================
+// 🌐 HTTP API SERVER (ROBLOX & STATS)
+// ============================================
 
 const PORT = process.env.PORT || 3000;
 
@@ -142,15 +160,24 @@ http.createServer((req, res) => {
         const whitelist = getWhitelist();
         const entry = whitelist[user];
 
+        // MUST ALWAYS RETURN HTTP 200 OK TO ROBLOX EXECUTORS
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+
         if (entry && entry.expiresAt > Date.now()) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ allowed: true, expiresAt: entry.expiresAt }));
         } else {
-            res.writeHead(403, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ allowed: false, reason: "Expired or Not Whitelisted" }));
         }
     }
 
+    if (url.pathname === '/api/stats') {
+        res.writeHead(200, { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        });
+        return res.end(JSON.stringify(getWhitelist()));
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end("Milky Backend Active");
-}).listen(PORT, () => console.log(`🌐 Server active on port ${PORT}`));
+}).listen(PORT, () => console.log(`🌐 Whitelist API active on port ${PORT}`));
