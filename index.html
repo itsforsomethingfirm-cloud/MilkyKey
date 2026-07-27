@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Milky Hub - Admin Dashboard</title>
+    <style>
+        body {
+            background-color: #0d0e12;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 30px;
+            margin: 0;
+        }
+        .container { max-width: 900px; margin: auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #222; padding-bottom: 20px; }
+        h1 { color: #00e6b4; margin: 0; }
+        .card { background: #16181f; border-radius: 10px; padding: 20px; margin-top: 20px; border: 1px solid #2a2e3d; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #222; }
+        th { color: #888; font-size: 14px; }
+        .status-active { color: #00ff9d; font-weight: bold; }
+        .status-expired { color: #ff4757; font-weight: bold; }
+        .badge { background: #222634; padding: 4px 8px; border-radius: 6px; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🥛 Milky Hub Analytics</h1>
+            <span id="total-users" class="badge">Loading...</span>
+        </div>
+
+        <div class="card">
+            <h3>Active Whitelists</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ROBLOX USER</th>
+                        <th>DISCORD TAG</th>
+                        <th>STATUS</th>
+                        <th>EXPIRES IN</th>
+                    </tr>
+                </thead>
+                <tbody id="user-table">
+                    <tr><td colspan="4">Fetching live whitelist data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "https://milkykey.onrender.com/api/stats";
+
+        async function fetchStats() {
+            try {
+                const res = await fetch(API_URL);
+                const data = await res.json();
+                
+                const table = document.getElementById('user-table');
+                table.innerHTML = '';
+
+                const users = Object.keys(data);
+                document.getElementById('total-users').innerText = `Total Whitelisted: ${users.length}`;
+
+                if (users.length === 0) {
+                    table.innerHTML = '<tr><td colspan="4">No active whitelists found.</td></tr>';
+                    return;
+                }
+
+                users.forEach(user => {
+                    const item = data[user];
+                    const isExpired = Date.now() > item.expiresAt;
+                    const timeLeft = isExpired ? "Expired" : Math.round((item.expiresAt - Date.now()) / (1000 * 60 * 60)) + " hrs";
+
+                    const row = `
+                        <tr>
+                            <td><b>${user}</b></td>
+                            <td>${item.discordTag || 'Unknown'}</td>
+                            <td class="${isExpired ? 'status-expired' : 'status-active'}">${isExpired ? 'EXPIRED' : 'ACTIVE'}</td>
+                            <td>${timeLeft}</td>
+                        </tr>
+                    `;
+                    table.innerHTML += row;
+                });
+            } catch (err) {
+                console.error(err);
+                document.getElementById('user-table').innerHTML = '<tr><td colspan="4" style="color:red;">Error connecting to Render API.</td></tr>';
+            }
+        }
+
+        fetchStats();
+        setInterval(fetchStats, 10000); // Auto refresh every 10 seconds
+    </script>
+</body>
+</html>
