@@ -27,7 +27,7 @@ if (!TOKEN || !CLIENT_ID) {
     process.exit(1);
 }
 
--- Helpers
+// Helpers
 function getWhitelist() {
     if (!fs.existsSync(WHITELIST_FILE)) fs.writeFileSync(WHITELIST_FILE, '{}');
     try {
@@ -106,7 +106,7 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 client.on('clientReady', () => {
     console.log(`🤖 Logged in as ${client.user.tag}!`);
     
-    -- Render Keep-Alive
+    // Render Keep-Alive
     if (RENDER_EXTERNAL_URL) {
         setInterval(() => {
             const pingUrl = `${RENDER_EXTERNAL_URL}/ping`;
@@ -121,7 +121,7 @@ client.on('interactionCreate', async interaction => {
 
     const { commandName } = interaction;
 
-    -- PUBLIC: VERIFY
+    // PUBLIC: VERIFY
     if (commandName === 'verify') {
         const username = interaction.options.getString('username').trim().toLowerCase();
         const whitelist = getWhitelist();
@@ -145,12 +145,12 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ embeds: [embed] });
     }
 
-    -- PUBLIC: PING
+    // PUBLIC: PING
     if (commandName === 'ping') {
         return interaction.reply({ content: `🏓 Pong! \`${Date.now() - interaction.createdTimestamp}ms\`` });
     }
 
-    -- ADMIN: MANUAL ADD
+    // ADMIN: MANUAL ADD
     if (commandName === 'admin-add') {
         const username = interaction.options.getString('username').trim().toLowerCase();
         const days = interaction.options.getInteger('days') || 30;
@@ -170,7 +170,7 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ content: `👑 **[ADMIN]** Whitelisted **${username}** for **${days} days**!` });
     }
 
-    -- ADMIN: REMOVE / BLACKLIST
+    // ADMIN: REMOVE / BLACKLIST
     if (commandName === 'admin-remove') {
         const username = interaction.options.getString('username').trim().toLowerCase();
         const whitelist = getWhitelist();
@@ -184,7 +184,7 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
-    -- ADMIN: LIST USERS
+    // ADMIN: LIST USERS
     if (commandName === 'admin-list') {
         const whitelist = getWhitelist();
         const keys = Object.keys(whitelist);
@@ -218,7 +218,7 @@ const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    -- CORS headers for Vercel Dashboard
+    // CORS headers for Vercel Dashboard
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
 
@@ -246,7 +246,7 @@ http.createServer((req, res) => {
         }
     }
 
-    -- Vercel Dashboard Endpoint
+    // Vercel Dashboard Endpoint
     if (url.pathname === '/api/stats') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(getWhitelist()));
