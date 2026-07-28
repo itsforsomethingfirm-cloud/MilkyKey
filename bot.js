@@ -1,4 +1,4 @@
-Const { 
+const { 
     Client, 
     GatewayIntentBits, 
     REST, 
