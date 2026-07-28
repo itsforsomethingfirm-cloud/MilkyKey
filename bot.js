@@ -1,4 +1,4 @@
-const { 
+Const { 
     Client, 
     GatewayIntentBits, 
     REST, 
@@ -41,22 +41,17 @@ function saveWhitelist(data) {
     fs.writeFileSync(WHITELIST_FILE, JSON.stringify(data, null, 2));
 }
 
-// Requires GuildMembers Intent for member leave detection
-const client = new Client({ 
-    intents: [ 
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers 
-    ] 
-});
+const client = new Client({ intents: [ GatewayIntentBits.Guilds ] });
 
 // ============================================
 // 📜 SLASH COMMAND REGISTRATION
 // ============================================
 
 const commands = [
+    // Public Command: Everyone can use this
     new SlashCommandBuilder()
         .setName('verify')
-        .setDescription('Get 6-hour script access for your Roblox account')
+        .setDescription('Get 24-hour script access for your Roblox account')
         .addStringOption(opt => 
             opt.setName('username')
                .setDescription('Your exact Roblox username')
@@ -70,6 +65,7 @@ const commands = [
         .setIntegrationTypes([ApplicationIntegrationType.GuildInstall])
         .setContexts([InteractionContextType.Guild]),
 
+    // ADMIN COMMAND 1: Give custom whitelist duration
     new SlashCommandBuilder()
         .setName('admin-add')
         .setDescription('[ADMIN] Add or update a whitelist entry manually')
@@ -77,12 +73,14 @@ const commands = [
         .addStringOption(opt => opt.setName('username').setDescription('Roblox username').setRequired(true))
         .addIntegerOption(opt => opt.setName('days').setDescription('Number of days (default: 30)').setRequired(false)),
 
+    // ADMIN COMMAND 2: Revoke/Blacklist a user
     new SlashCommandBuilder()
         .setName('admin-remove')
         .setDescription('[ADMIN] Remove a user from the whitelist')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .addStringOption(opt => opt.setName('username').setDescription('Roblox username').setRequired(true)),
 
+    // ADMIN COMMAND 3: List all active keys
     new SlashCommandBuilder()
         .setName('admin-list')
         .setDescription('[ADMIN] View all whitelisted users')
@@ -102,36 +100,20 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 })();
 
 // ============================================
-// ⚡ INTERACTION & EVENT HANDLERS
+// ⚡ INTERACTION HANDLERS
 // ============================================
 
 client.on('clientReady', () => {
     console.log(`🤖 Logged in as ${client.user.tag}!`);
     
-    // Render Keep-Alive Ping
+    // Render Keep-Alive
     if (RENDER_EXTERNAL_URL) {
         setInterval(() => {
             const pingUrl = `${RENDER_EXTERNAL_URL}/ping`;
             const requester = pingUrl.startsWith('https') ? https : http;
             requester.get(pingUrl, (res) => {}).on('error', () => {});
-        }, 5 * 60 * 1000); // Every 5 minutes
+        }, 10 * 60 * 1000);
     }
-});
-
-// Revoke access when user leaves Discord server
-client.on('guildMemberRemove', member => {
-    const whitelist = getWhitelist();
-    let updated = false;
-
-    for (const username in whitelist) {
-        if (whitelist[username].discordId === member.id) {
-            delete whitelist[username];
-            updated = true;
-            console.log(`❌ User ${member.user.tag} left server. Revoked whitelist for: ${username}`);
-        }
-    }
-
-    if (updated) saveWhitelist(whitelist);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -139,10 +121,11 @@ client.on('interactionCreate', async interaction => {
 
     const { commandName } = interaction;
 
+    // PUBLIC: VERIFY
     if (commandName === 'verify') {
         const username = interaction.options.getString('username').trim().toLowerCase();
         const whitelist = getWhitelist();
-        const expiresAt = Date.now() + (6 * 60 * 60 * 1000); // 6 Hours
+        const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 Hours
 
         whitelist[username] = {
             discordId: interaction.user.id,
@@ -155,17 +138,19 @@ client.on('interactionCreate', async interaction => {
 
         const embed = new EmbedBuilder()
             .setTitle('✅ Access Granted!')
-            .setDescription(`Roblox user **${username}** whitelisted for **6 hours**.\n*Your script UI will automatically update in-game!*`)
+            .setDescription(`Roblox user **${username}** whitelisted for **24 hours**.`)
             .addFields({ name: 'Expires', value: `<t:${Math.floor(expiresAt / 1000)}:R>` })
             .setColor('#2ECC71');
 
         return interaction.reply({ embeds: [embed] });
     }
 
+    // PUBLIC: PING
     if (commandName === 'ping') {
         return interaction.reply({ content: `🏓 Pong! \`${Date.now() - interaction.createdTimestamp}ms\`` });
     }
 
+    // ADMIN: MANUAL ADD
     if (commandName === 'admin-add') {
         const username = interaction.options.getString('username').trim().toLowerCase();
         const days = interaction.options.getInteger('days') || 30;
@@ -185,6 +170,7 @@ client.on('interactionCreate', async interaction => {
         return interaction.reply({ content: `👑 **[ADMIN]** Whitelisted **${username}** for **${days} days**!` });
     }
 
+    // ADMIN: REMOVE / BLACKLIST
     if (commandName === 'admin-remove') {
         const username = interaction.options.getString('username').trim().toLowerCase();
         const whitelist = getWhitelist();
@@ -198,11 +184,14 @@ client.on('interactionCreate', async interaction => {
         }
     }
 
+    // ADMIN: LIST USERS
     if (commandName === 'admin-list') {
         const whitelist = getWhitelist();
         const keys = Object.keys(whitelist);
 
-        if (keys.length === 0) return interaction.reply({ content: "📜 Whitelist is empty." });
+        if (keys.length === 0) {
+            return interaction.reply({ content: "📜 Whitelist is currently empty." });
+        }
 
         let listText = keys.map(user => {
             const exp = Math.floor(whitelist[user].expiresAt / 1000);
@@ -221,7 +210,7 @@ client.on('interactionCreate', async interaction => {
 client.login(TOKEN);
 
 // ============================================
-// 🌐 HTTP API SERVER
+// 🌐 HTTP API SERVER (ROBLOX & VERCEL DASHBOARD)
 // ============================================
 
 const PORT = process.env.PORT || 3000;
@@ -229,6 +218,7 @@ const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
+    // CORS headers for Vercel Dashboard
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
 
@@ -242,35 +232,21 @@ http.createServer((req, res) => {
         return res.end("PONG");
     }
 
-    // Checking whitelist status
-    if (url.pathname === '/check' || url.pathname === '/check-whitelist') {
-        // Reads from EITHER ?user= OR ?username=
-        const rawUser = url.searchParams.get('user') || url.searchParams.get('username') || '';
-        const user = rawUser.trim().toLowerCase();
-        
+    if (url.pathname === '/check') {
+        const user = (url.searchParams.get('user') || '').trim().toLowerCase();
         const whitelist = getWhitelist();
         const entry = whitelist[user];
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
 
         if (entry && entry.expiresAt > Date.now()) {
-            // Returns ALL common verification key flags to prevent Lua parsing errors
-            return res.end(JSON.stringify({ 
-                allowed: true, 
-                whitelisted: true, 
-                success: true, 
-                expiresAt: entry.expiresAt 
-            }));
+            return res.end(JSON.stringify({ allowed: true, expiresAt: entry.expiresAt }));
         } else {
-            return res.end(JSON.stringify({ 
-                allowed: false, 
-                whitelisted: false, 
-                success: false, 
-                reason: "Expired or Not Whitelisted" 
-            }));
+            return res.end(JSON.stringify({ allowed: false, reason: "Expired or Not Whitelisted" }));
         }
     }
 
+    // Vercel Dashboard Endpoint
     if (url.pathname === '/api/stats') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify(getWhitelist()));
@@ -279,3 +255,4 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end("Milky Backend Active");
 }).listen(PORT, () => console.log(`🌐 API Active on port ${PORT}`));
+
