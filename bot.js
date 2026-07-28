@@ -41,7 +41,13 @@ function saveWhitelist(data) {
     fs.writeFileSync(WHITELIST_FILE, JSON.stringify(data, null, 2));
 }
 
-const client = new Client({ intents: [ GatewayIntentBits.Guilds ] });
+// Added GatewayIntentBits.GuildMembers to listen for members leaving
+const client = new Client({ 
+    intents: [ 
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers 
+    ] 
+});
 
 // ============================================
 // 📜 SLASH COMMAND REGISTRATION
@@ -51,7 +57,7 @@ const commands = [
     // Public Command: Everyone can use this
     new SlashCommandBuilder()
         .setName('verify')
-        .setDescription('Get 24-hour script access for your Roblox account')
+        .setDescription('Get 6-hour script access for your Roblox account')
         .addStringOption(opt => 
             opt.setName('username')
                .setDescription('Your exact Roblox username')
@@ -100,7 +106,7 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 })();
 
 // ============================================
-// ⚡ INTERACTION HANDLERS
+// ⚡ INTERACTION & EVENT HANDLERS
 // ============================================
 
 client.on('clientReady', () => {
@@ -116,6 +122,24 @@ client.on('clientReady', () => {
     }
 });
 
+// EVENT: Auto-revoke access when a user leaves the Discord server
+client.on('guildMemberRemove', member => {
+    const whitelist = getWhitelist();
+    let updated = false;
+
+    for (const username in whitelist) {
+        if (whitelist[username].discordId === member.id) {
+            delete whitelist[username];
+            updated = true;
+            console.log(`❌ User ${member.user.tag} left the server. Revoked whitelist for: ${username}`);
+        }
+    }
+
+    if (updated) {
+        saveWhitelist(whitelist);
+    }
+});
+
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
@@ -125,7 +149,9 @@ client.on('interactionCreate', async interaction => {
     if (commandName === 'verify') {
         const username = interaction.options.getString('username').trim().toLowerCase();
         const whitelist = getWhitelist();
-        const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 Hours
+        
+        // ⚡ UPDATED: Set pass duration to 6 Hours (6 * 60 * 60 * 1000)
+        const expiresAt = Date.now() + (6 * 60 * 60 * 1000);
 
         whitelist[username] = {
             discordId: interaction.user.id,
@@ -138,7 +164,7 @@ client.on('interactionCreate', async interaction => {
 
         const embed = new EmbedBuilder()
             .setTitle('✅ Access Granted!')
-            .setDescription(`Roblox user **${username}** whitelisted for **24 hours**.`)
+            .setDescription(`Roblox user **${username}** whitelisted for **6 hours**.\n*Note: Leaving the Discord server revokes access.*`)
             .addFields({ name: 'Expires', value: `<t:${Math.floor(expiresAt / 1000)}:R>` })
             .setColor('#2ECC71');
 
