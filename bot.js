@@ -1,258 +1,80 @@
-const { 
-    Client, 
-    GatewayIntentBits, 
-    REST, 
-    Routes, 
-    SlashCommandBuilder, 
-    EmbedBuilder,
-    PermissionFlagsBits,
-    ApplicationIntegrationType,
-    InteractionContextType
-} = require('discord.js');
-const http = require('http');
-const https = require('https');
-const fs = require('fs');
+const { Client, GatewayIntentBits } = require('discord.js');
+const express = require('express');
+const axios = require('axios');
 
-// ============================================
-// ⚙️ CONFIGURATION
-// ============================================
-
-const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL;
-const WHITELIST_FILE = './whitelist.json';
-
-if (!TOKEN || !CLIENT_ID) {
-    console.error("❌ ERROR: Missing DISCORD_TOKEN or CLIENT_ID!");
-    process.exit(1);
-}
-
-// Helpers
-function getWhitelist() {
-    if (!fs.existsSync(WHITELIST_FILE)) fs.writeFileSync(WHITELIST_FILE, '{}');
-    try {
-        return JSON.parse(fs.readFileSync(WHITELIST_FILE));
-    } catch {
-        return {};
-    }
-}
-
-function saveWhitelist(data) {
-    fs.writeFileSync(WHITELIST_FILE, JSON.stringify(data, null, 2));
-}
-
-const client = new Client({ intents: [ GatewayIntentBits.Guilds ] });
-
-// ============================================
-// 📜 SLASH COMMAND REGISTRATION
-// ============================================
-
-const commands = [
-    // Public Command: Everyone can use this
-    new SlashCommandBuilder()
-        .setName('verify')
-        .setDescription('Get 24-hour script access for your Roblox account')
-        .addStringOption(opt => 
-            opt.setName('username')
-               .setDescription('Your exact Roblox username')
-               .setRequired(true))
-        .setIntegrationTypes([ApplicationIntegrationType.GuildInstall])
-        .setContexts([InteractionContextType.Guild]),
-
-    new SlashCommandBuilder()
-        .setName('ping')
-        .setDescription('Check bot latency')
-        .setIntegrationTypes([ApplicationIntegrationType.GuildInstall])
-        .setContexts([InteractionContextType.Guild]),
-
-    // ADMIN COMMAND 1: Give custom whitelist duration
-    new SlashCommandBuilder()
-        .setName('admin-add')
-        .setDescription('[ADMIN] Add or update a whitelist entry manually')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addStringOption(opt => opt.setName('username').setDescription('Roblox username').setRequired(true))
-        .addIntegerOption(opt => opt.setName('days').setDescription('Number of days (default: 30)').setRequired(false)),
-
-    // ADMIN COMMAND 2: Revoke/Blacklist a user
-    new SlashCommandBuilder()
-        .setName('admin-remove')
-        .setDescription('[ADMIN] Remove a user from the whitelist')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addStringOption(opt => opt.setName('username').setDescription('Roblox username').setRequired(true)),
-
-    // ADMIN COMMAND 3: List all active keys
-    new SlashCommandBuilder()
-        .setName('admin-list')
-        .setDescription('[ADMIN] View all whitelisted users')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-].map(cmd => cmd.toJSON());
-
-const rest = new REST({ version: '10' }).setToken(TOKEN);
-
-(async () => {
-    try {
-        console.log('🔄 Syncing slash commands globally...');
-        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('✅ Commands synced! /verify is now available for ALL members.');
-    } catch (error) {
-        console.error('❌ Command sync error:', error);
-    }
-})();
-
-// ============================================
-// ⚡ INTERACTION HANDLERS
-// ============================================
-
-client.on('clientReady', () => {
-    console.log(`🤖 Logged in as ${client.user.tag}!`);
-    
-    // Render Keep-Alive
-    if (RENDER_EXTERNAL_URL) {
-        setInterval(() => {
-            const pingUrl = `${RENDER_EXTERNAL_URL}/ping`;
-            const requester = pingUrl.startsWith('https') ? https : http;
-            requester.get(pingUrl, (res) => {}).on('error', () => {});
-        }, 10 * 60 * 1000);
-    }
+const app = express();
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
 });
 
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
+// CONFIGURATION
+const CHANNEL_ID = process.env.VERIFY_CHANNEL_ID;
+const whitelist = new Set(); // Store whitelisted usernames
 
-    const { commandName } = interaction;
+client.on('ready', () => {
+    console.log(`Logged in as ${client.user.tag}! Milky Auto-Verify API is running.`);
+});
 
-    // PUBLIC: VERIFY
-    if (commandName === 'verify') {
-        const username = interaction.options.getString('username').trim().toLowerCase();
-        const whitelist = getWhitelist();
-        const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 Hours
+client.on('messageCreate', async (message) => {
+    if (message.author.bot || message.channel.id !== CHANNEL_ID) return;
 
-        whitelist[username] = {
-            discordId: interaction.user.id,
-            discordTag: interaction.user.tag,
-            expiresAt: expiresAt,
-            verifiedAt: Date.now()
-        };
+    const username = message.content.trim();
+    const lowerUser = username.toLowerCase();
 
-        saveWhitelist(whitelist);
+    // Roblox username format validation
+    const validFormat = /^[a-zA-Z0-9_]{3,20}$/.test(username);
 
-        const embed = new EmbedBuilder()
-            .setTitle('✅ Access Granted!')
-            .setDescription(`Roblox user **${username}** whitelisted for **24 hours**.`)
-            .addFields({ name: 'Expires', value: `<t:${Math.floor(expiresAt / 1000)}:R>` })
-            .setColor('#2ECC71');
-
-        return interaction.reply({ embeds: [embed] });
+    if (!validFormat) {
+        await message.react('🚫');
+        await message.reply(`❌ **"${username}"** is not a valid Roblox username format.`);
+        return;
     }
 
-    // PUBLIC: PING
-    if (commandName === 'ping') {
-        return interaction.reply({ content: `🏓 Pong! \`${Date.now() - interaction.createdTimestamp}ms\`` });
+    if (whitelist.has(lowerUser)) {
+        await message.react('☑️');
+        await message.reply(`ℹ️ **${username}** is already whitelisted! Your script will auto-load now.`);
+        return;
     }
 
-    // ADMIN: MANUAL ADD
-    if (commandName === 'admin-add') {
-        const username = interaction.options.getString('username').trim().toLowerCase();
-        const days = interaction.options.getInteger('days') || 30;
-        const whitelist = getWhitelist();
+    try {
+        // Verify account exists via Roblox Web API
+        const response = await axios.post('https://users.roblox.com/v1/usernames/users', {
+            usernames: [username],
+            excludeBannedUsers: true
+        });
 
-        const expiresAt = Date.now() + (days * 24 * 60 * 60 * 1000);
-
-        whitelist[username] = {
-            discordId: interaction.user.id,
-            discordTag: `ADMIN OVERRIDE (${interaction.user.tag})`,
-            expiresAt: expiresAt,
-            verifiedAt: Date.now()
-        };
-
-        saveWhitelist(whitelist);
-
-        return interaction.reply({ content: `👑 **[ADMIN]** Whitelisted **${username}** for **${days} days**!` });
-    }
-
-    // ADMIN: REMOVE / BLACKLIST
-    if (commandName === 'admin-remove') {
-        const username = interaction.options.getString('username').trim().toLowerCase();
-        const whitelist = getWhitelist();
-
-        if (whitelist[username]) {
-            delete whitelist[username];
-            saveWhitelist(whitelist);
-            return interaction.reply({ content: `🚫 **[ADMIN]** Revoked access for **${username}**.` });
+        if (response.data && response.data.data && response.data.data.length > 0) {
+            whitelist.add(lowerUser);
+            await message.react('☑️');
+            await message.reply(`✅ **${username}** has been whitelisted! Welcome to Milky Hub!`);
         } else {
-            return interaction.reply({ content: `⚠️ User **${username}** is not in the whitelist.` });
+            await message.react('🚫');
+            await message.reply(`❌ Roblox account **"${username}"** could not be found.`);
         }
-    }
-
-    // ADMIN: LIST USERS
-    if (commandName === 'admin-list') {
-        const whitelist = getWhitelist();
-        const keys = Object.keys(whitelist);
-
-        if (keys.length === 0) {
-            return interaction.reply({ content: "📜 Whitelist is currently empty." });
-        }
-
-        let listText = keys.map(user => {
-            const exp = Math.floor(whitelist[user].expiresAt / 1000);
-            return `• **${user}** - Expires <t:${exp}:R>`;
-        }).join('\n');
-
-        const embed = new EmbedBuilder()
-            .setTitle(`📜 Whitelisted Users (${keys.length})`)
-            .setDescription(listText.length > 4000 ? listText.substring(0, 4000) + '...' : listText)
-            .setColor('#3498DB');
-
-        return interaction.reply({ embeds: [embed], ephemeral: true });
+    } catch (error) {
+        console.error("Roblox API Error:", error.message);
+        await message.react('🚫');
     }
 });
 
-client.login(TOKEN);
+// Web Endpoint for Roblox Lua Script to check whitelist status live
+app.get('/check-verify', (req, res) => {
+    const user = (req.query.username || "").toLowerCase();
+    if (whitelist.has(user)) {
+        return res.json({ verified: true });
+    }
+    return res.json({ verified: false });
+});
 
-// ============================================
-// 🌐 HTTP API SERVER (ROBLOX & VERCEL DASHBOARD)
-// ============================================
+app.get('/', (req, res) => {
+    res.send("Milky Verification Service Online!");
+});
 
 const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
-http.createServer((req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-
-    // CORS headers for Vercel Dashboard
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        return res.end();
-    }
-
-    if (url.pathname === '/ping') {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        return res.end("PONG");
-    }
-
-    if (url.pathname === '/check') {
-        const user = (url.searchParams.get('user') || '').trim().toLowerCase();
-        const whitelist = getWhitelist();
-        const entry = whitelist[user];
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-
-        if (entry && entry.expiresAt > Date.now()) {
-            return res.end(JSON.stringify({ allowed: true, expiresAt: entry.expiresAt }));
-        } else {
-            return res.end(JSON.stringify({ allowed: false, reason: "Expired or Not Whitelisted" }));
-        }
-    }
-
-    // Vercel Dashboard Endpoint
-    if (url.pathname === '/api/stats') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify(getWhitelist()));
-    }
-
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end("Milky Backend Active");
-}).listen(PORT, () => console.log(`🌐 API Active on port ${PORT}`));
-
+client.login(process.env.DISCORD_TOKEN);
