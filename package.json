@@ -1,12 +1,17 @@
 {
-  "name": "milky-suite-bot",
-  "version": "2.0.0",
-  "description": "Discord Whitelist & Script Verification System",
+  "name": "milky-key",
+  "version": "1.0.0",
+  "description": "Milky Scripts Auto-Verification & Whitelist Bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
-    "discord.js": "^14.15.3"
+    "axios": "^1.7.9",
+    "discord.js": "^14.18.0",
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
