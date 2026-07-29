@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const axios = require('axios');
 
@@ -11,10 +11,10 @@ const client = new Client({
 });
 
 // HARDCODED CONFIGURATION
-const CHANNEL_ID = "1531387861591523558"; // Your verify channel ID
+const CHANNEL_ID = "1531387861591523558";
 let maintenanceMode = false;
 
-// Whitelist Memory Store (6-Hour Access Cycles)
+// 6-Hour Expiration Store
 const whitelist = new Map(); 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
@@ -83,11 +83,19 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.deferReply({ ephemeral: false });
 
         if (CHANNEL_ID && channelId !== CHANNEL_ID) {
-            return await interaction.editReply(`⚠️ Please use the <#${CHANNEL_ID}> channel to verify!`);
+            const errEmbed = new EmbedBuilder()
+                .setColor('#FF3333')
+                .setTitle('⚠️ Channel Restricted')
+                .setDescription(`Please use the <#${CHANNEL_ID}> channel to verify!`);
+            return await interaction.editReply({ embeds: [errEmbed] });
         }
 
         if (maintenanceMode) {
-            return await interaction.editReply("🛠️ **Script is under maintenance.** Please try again later!");
+            const maintEmbed = new EmbedBuilder()
+                .setColor('#FFA500')
+                .setTitle('🛠️ Maintenance Mode')
+                .setDescription('Script is currently under maintenance. Please try again later!');
+            return await interaction.editReply({ embeds: [maintEmbed] });
         }
 
         const username = options.getString('username').trim();
@@ -95,17 +103,26 @@ client.on('interactionCreate', async (interaction) => {
 
         const validFormat = /^[a-zA-Z0-9_]{3,20}$/.test(username);
         if (!validFormat) {
-            return await interaction.editReply(`🚫 **"${username}"** is not a valid Roblox username format.`);
+            const invalidEmbed = new EmbedBuilder()
+                .setColor('#FF3333')
+                .setTitle('❌ Invalid Username')
+                .setDescription(`Roblox user **${username}** is not a valid Roblox username.`);
+            return await interaction.editReply({ embeds: [invalidEmbed] });
         }
 
         const now = Date.now();
 
-        // Check active whitelist
+        -- Check active whitelist
         if (whitelist.has(lowerUser)) {
             const expireTime = whitelist.get(lowerUser);
             if (now < expireTime) {
-                const remainingMinutes = Math.floor((expireTime - now) / (1000 * 60));
-                return await interaction.editReply(`☑️ **${username}** is already verified! You have **${remainingMinutes}m** remaining.`);
+                const unixSeconds = Math.floor(expireTime / 1000);
+                const alreadyEmbed = new EmbedBuilder()
+                    .setColor('#00E676')
+                    .setTitle('✅ Access Already Granted!')
+                    .setDescription(`Roblox user **${username}** is already whitelisted.`)
+                    .addFields({ name: 'Expires', value: `<t:${unixSeconds}:R>` });
+                return await interaction.editReply({ embeds: [alreadyEmbed] });
             }
         }
 
@@ -117,15 +134,37 @@ client.on('interactionCreate', async (interaction) => {
             }, { timeout: 4000 });
 
             if (response.data && response.data.data && response.data.data.length > 0) {
-                whitelist.set(lowerUser, Date.now() + SIX_HOURS_MS);
-                return await interaction.editReply(`✅ **${username}** verified for **6 Hours**! Execute your script now.`);
+                const expireTimestamp = Date.now() + SIX_HOURS_MS;
+                const unixSeconds = Math.floor(expireTimestamp / 1000);
+                whitelist.set(lowerUser, expireTimestamp);
+
+                const grantedEmbed = new EmbedBuilder()
+                    .setColor('#00E676')
+                    .setTitle('✅ Access Granted!')
+                    .setDescription(`Roblox user **${username}** whitelisted for **6 hours**.`)
+                    .addFields({ name: 'Expires', value: `<t:${unixSeconds}:R>` });
+
+                return await interaction.editReply({ embeds: [grantedEmbed] });
             } else {
-                return await interaction.editReply(`❌ Roblox account **"${username}"** does not exist.`);
+                const notFoundEmbed = new EmbedBuilder()
+                    .setColor('#FF3333')
+                    .setTitle('❌ Account Not Found')
+                    .setDescription(`Roblox user **${username}** does not exist.`);
+                return await interaction.editReply({ embeds: [notFoundEmbed] });
             }
         } catch (error) {
-            // Fallback whitelist if Roblox API is down/rate-limited
-            whitelist.set(lowerUser, Date.now() + SIX_HOURS_MS);
-            return await interaction.editReply(`✅ **${username}** verified for **6 Hours**! Execute your script now.`);
+            // Fallback whitelist
+            const expireTimestamp = Date.now() + SIX_HOURS_MS;
+            const unixSeconds = Math.floor(expireTimestamp / 1000);
+            whitelist.set(lowerUser, expireTimestamp);
+
+            const grantedEmbed = new EmbedBuilder()
+                .setColor('#00E676')
+                .setTitle('✅ Access Granted!')
+                .setDescription(`Roblox user **${username}** whitelisted for **6 hours**.`)
+                .addFields({ name: 'Expires', value: `<t:${unixSeconds}:R>` });
+
+            return await interaction.editReply({ embeds: [grantedEmbed] });
         }
     }
 
