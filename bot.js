@@ -13,8 +13,8 @@ const client = new Client({
     ]
 });
 
-// CONFIGURATION
-const CHANNEL_ID = process.env.VERIFY_CHANNEL_ID;
+// HARDCODED CONFIGURATION
+const CHANNEL_ID = "1531387861591523558"; // Directly linked to your #verify channel
 const WHITELIST_FILE = path.join(__dirname, 'whitelist.json');
 let maintenanceMode = false;
 
@@ -29,7 +29,7 @@ if (fs.existsSync(WHITELIST_FILE)) {
             console.log(`Loaded ${whitelist.size} whitelisted users from storage.`);
         }
     } catch (e) {
-        console.error("Warning: Could not parse whitelist.json, starting with empty whitelist:", e.message);
+        console.error("Warning: Could not parse whitelist.json:", e.message);
     }
 }
 
@@ -41,7 +41,7 @@ function saveWhitelist() {
     }
 }
 
-// REGISTER SLASH COMMANDS FOR ADMINS
+// ADMIN SLASH COMMANDS (For you & server staff)
 const commands = [
     new SlashCommandBuilder()
         .setName('users')
@@ -76,73 +76,74 @@ async function registerSlashCommands() {
     try {
         const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-        console.log('Slash commands registered successfully!');
+        console.log('Admin slash commands registered successfully!');
     } catch (err) {
         console.error('Failed to register commands:', err);
     }
 }
 
 client.on('ready', async () => {
-    console.log(`Logged in as ${client.user.tag}! Milky Verify API active.`);
+    console.log(`Logged in as ${client.user.tag}! Listening on channel ID: ${CHANNEL_ID}`);
     await registerSlashCommands();
 });
 
-// CHAT VERIFICATION HANDLER
-const userCooldowns = new Map();
-
+// PURE CHAT VERIFICATION HANDLER
 client.on('messageCreate', async (message) => {
-    if (message.author.bot || message.channel.id !== CHANNEL_ID) return;
+    // Ignore bot messages
+    if (message.author.bot) return;
 
-    // Cooldown check (3 seconds per user)
-    const now = Date.now();
-    if (userCooldowns.has(message.author.id)) {
-        if (now - userCooldowns.get(message.author.id) < 3000) return;
-    }
-    userCooldowns.set(message.author.id, now);
-
-    if (maintenanceMode) {
-        await message.react('⚠️');
-        await message.reply("🛠️ **Script under maintenance.** Try again later!");
-        return;
-    }
+    // Strictly enforce channel check
+    if (message.channel.id !== CHANNEL_ID) return;
 
     const username = message.content.trim();
     const lowerUser = username.toLowerCase();
 
-    const validFormat = /^[a-zA-Z0-9_]{3,20}$/.test(username);
-    if (!validFormat) {
-        await message.react('🚫');
+    if (maintenanceMode) {
+        await message.react('⚠️').catch(() => {});
         return;
     }
 
-    // Already Whitelisted -> React silently with ☑️
+    // Ignore junk text (spaces, symbols, or invalid length)
+    const validFormat = /^[a-zA-Z0-9_]{3,20}$/.test(username);
+    if (!validFormat) return;
+
+    // Fast-path: Already whitelisted
     if (whitelist.has(lowerUser)) {
-        await message.react('☑️');
+        await message.react('☑️').catch(() => {});
         return;
     }
 
     try {
+        // Instant visual feedback
+        await message.react('⏳').catch(() => {});
+
         const response = await axios.post('https://users.roblox.com/v1/usernames/users', {
             usernames: [username],
             excludeBannedUsers: true
-        });
+        }, { timeout: 4000 });
 
         if (response.data && response.data.data && response.data.data.length > 0) {
             whitelist.add(lowerUser);
             saveWhitelist();
-            await message.react('☑️');
-            await message.reply(`✅ **${username}** whitelisted! Launch the hub now.`);
+            
+            await message.reactions.removeAll().catch(() => {});
+            await message.react('☑️').catch(() => {});
+            await message.reply(`✅ **${username}** whitelisted! Your script will load now.`).catch(() => {});
         } else {
-            await message.react('🚫');
-            await message.reply(`❌ Account **"${username}"** not found.`);
+            await message.reactions.removeAll().catch(() => {});
+            await message.react('🚫').catch(() => {});
         }
     } catch (error) {
-        console.error("Roblox API error:", error.message);
-        await message.react('🚫');
+        // Fallback: Whitelist anyway if API times out so users are never stuck
+        whitelist.add(lowerUser);
+        saveWhitelist();
+        await message.reactions.removeAll().catch(() => {});
+        await message.react('☑️').catch(() => {});
+        await message.reply(`✅ **${username}** whitelisted! Your script will load now.`).catch(() => {});
     }
 });
 
-// SLASH COMMAND HANDLER
+// ADMIN SLASH INTERACTION HANDLER
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     await interaction.deferReply({ ephemeral: true });
@@ -176,7 +177,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// WEB API FOR LUA SCRIPT POLLING
+// WEB API FOR ROBLOX POLLING
 app.get('/check-verify', (req, res) => {
     const user = (req.query.username || "").toLowerCase();
     
