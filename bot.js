@@ -11,17 +11,15 @@ const client = new Client({
 });
 
 // HARDCODED CONFIGURATION
-const CHANNEL_ID = "1531387861591523558"; // Channel restriction
+const CHANNEL_ID = "1531387861591523558"; // Your verify channel ID
 let maintenanceMode = false;
 
-// Whitelist Map to store username -> timestamp (when it expires)
-// Memory store is perfect here since access is temporary (6 hours)!
+// Whitelist Memory Store (6-Hour Access Cycles)
 const whitelist = new Map(); 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
-// REGISTER SLASH COMMANDS
+// REGISTER SLASH COMMANDS (/v)
 const commands = [
-    // 6-Hour Public Verification Command
     new SlashCommandBuilder()
         .setName('v')
         .setDescription('Verify your Roblox username for 6 hours of access')
@@ -31,17 +29,16 @@ const commands = [
                .setRequired(true)
         ),
 
-    // Admin Commands
     new SlashCommandBuilder()
         .setName('users')
         .setDescription('Admin command to view user statistics')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addSubcommand(sub => sub.setName('total').setDescription('Total active 6h whitelisted users'))
-        .addSubcommand(sub => sub.setName('list').setDescription('List active whitelisted usernames')),
+        .addSubcommand(sub => sub.setName('total').setDescription('Total active 6h users'))
+        .addSubcommand(sub => sub.setName('list').setDescription('List active usernames')),
 
     new SlashCommandBuilder()
         .setName('whitelist')
-        .setDescription('Admin manual management')
+        .setDescription('Admin manual whitelist management')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .addSubcommand(sub =>
             sub.setName('add')
@@ -50,7 +47,7 @@ const commands = [
         )
         .addSubcommand(sub =>
             sub.setName('remove')
-                .setDescription('Remove user whitelist')
+                .setDescription('Remove user from whitelist')
                 .addStringOption(opt => opt.setName('username').setDescription('Roblox Username').setRequired(true))
         ),
 
@@ -67,22 +64,21 @@ async function registerSlashCommands() {
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
         console.log('Slash command /v registered successfully!');
     } catch (err) {
-        console.error('Failed to register commands:', err);
+        console.error('Failed to register slash commands:', err);
     }
 }
 
 client.on('ready', async () => {
-    console.log(`Logged in as ${client.user.tag}! Listening for /v commands.`);
+    console.log(`Logged in as ${client.user.tag}! Listening in channel: ${CHANNEL_ID}`);
     await registerSlashCommands();
 });
 
-// SLASH COMMAND HANDLER
+// DISCORD INTERACTION HANDLER
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
     const { commandName, options, channelId } = interaction;
 
-    // PUBLIC /V COMMAND
     if (commandName === 'v') {
         await interaction.deferReply({ ephemeral: false });
 
@@ -91,7 +87,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (maintenanceMode) {
-            return await interaction.editReply("🛠️ **Script is under maintenance.** Try again later!");
+            return await interaction.editReply("🛠️ **Script is under maintenance.** Please try again later!");
         }
 
         const username = options.getString('username').trim();
@@ -99,21 +95,21 @@ client.on('interactionCreate', async (interaction) => {
 
         const validFormat = /^[a-zA-Z0-9_]{3,20}$/.test(username);
         if (!validFormat) {
-            return await interaction.editReply(`🚫 **"${username}"** is not a valid Roblox username.`);
+            return await interaction.editReply(`🚫 **"${username}"** is not a valid Roblox username format.`);
         }
 
         const now = Date.now();
 
-        // Check if user has an active, unexpired whitelist
+        // Check active whitelist
         if (whitelist.has(lowerUser)) {
             const expireTime = whitelist.get(lowerUser);
             if (now < expireTime) {
-                const remainingMinutes = math.floor((expireTime - now) / (1000 * 60));
-                return await interaction.editReply(`☑️ **${username}** is already verified! You have **${remainingMinutes}m** remaining of access.`);
+                const remainingMinutes = Math.floor((expireTime - now) / (1000 * 60));
+                return await interaction.editReply(`☑️ **${username}** is already verified! You have **${remainingMinutes}m** remaining.`);
             }
         }
 
-        // Verify Username on Roblox API
+        // Verify with Roblox API
         try {
             const response = await axios.post('https://users.roblox.com/v1/usernames/users', {
                 usernames: [username],
@@ -121,19 +117,15 @@ client.on('interactionCreate', async (interaction) => {
             }, { timeout: 4000 });
 
             if (response.data && response.data.data && response.data.data.length > 0) {
-                const expirationTimestamp = Date.now() + SIX_HOURS_MS;
-                whitelist.set(lowerUser, expirationTimestamp);
-
-                return await interaction.editReply(`✅ **${username}** verified for **6 Hours**! Launch your script now.`);
+                whitelist.set(lowerUser, Date.now() + SIX_HOURS_MS);
+                return await interaction.editReply(`✅ **${username}** verified for **6 Hours**! Execute your script now.`);
             } else {
-                return await interaction.editReply(`❌ Roblox account **"${username}"** not found.`);
+                return await interaction.editReply(`❌ Roblox account **"${username}"** does not exist.`);
             }
         } catch (error) {
-            // Fallback: Verify anyway for 6 hours if Roblox API fails
-            const expirationTimestamp = Date.now() + SIX_HOURS_MS;
-            whitelist.set(lowerUser, expirationTimestamp);
-
-            return await interaction.editReply(`✅ **${username}** verified for **6 Hours**! Launch your script now.`);
+            // Fallback whitelist if Roblox API is down/rate-limited
+            whitelist.set(lowerUser, Date.now() + SIX_HOURS_MS);
+            return await interaction.editReply(`✅ **${username}** verified for **6 Hours**! Execute your script now.`);
         }
     }
 
@@ -145,8 +137,6 @@ client.on('interactionCreate', async (interaction) => {
     if (commandName === 'users') {
         const sub = options.getSubcommand();
         const now = Date.now();
-        
-        // Clean active list
         const activeUsers = [];
         whitelist.forEach((exp, user) => {
             if (now < exp) activeUsers.push(user);
@@ -156,7 +146,7 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.editReply(`📊 **Active 6h Users:** \`${activeUsers.length}\``);
         } else if (sub === 'list') {
             const list = activeUsers.join(', ') || 'None';
-            await interaction.editReply(`📋 **Active Users (${activeUsers.length}):**\n\`\`\`\n${list}\n\`\`\``);
+            await interaction.editReply(`📋 **Active Whitelisted Users (${activeUsers.length}):**\n\`\`\`\n${list}\n\`\`\``);
         }
     } else if (commandName === 'whitelist') {
         const sub = options.getSubcommand();
@@ -164,7 +154,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (sub === 'add') {
             whitelist.set(user, Date.now() + SIX_HOURS_MS);
-            await interaction.editReply(`✅ Granted 6 hours to **${user}** manually.`);
+            await interaction.editReply(`✅ Granted 6 hours access to **${user}**.`);
         } else if (sub === 'remove') {
             whitelist.delete(user);
             await interaction.editReply(`🗑️ Removed **${user}** from whitelist.`);
@@ -175,26 +165,30 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// WEB API FOR ROBLOX POLLING
-app.get('/check-verify', (req, res) => {
-    const user = (req.query.username || "").toLowerCase();
+// WEB API FOR ROBLOX SCRIPT POLLING
+function handleCheck(req, res) {
+    const rawUser = req.query.user || req.query.username || "";
+    const user = rawUser.trim().toLowerCase();
     
-    if (maintenanceMode) return res.json({ verified: false, maintenance: true });
+    if (maintenanceMode) {
+        return res.json({ allowed: false, verified: false, maintenance: true });
+    }
 
-    if (whitelist.has(user)) {
+    if (user && whitelist.has(user)) {
         const expireTime = whitelist.get(user);
         if (Date.now() < expireTime) {
-            return res.json({ verified: true, maintenance: false });
+            return res.json({ allowed: true, verified: true, maintenance: false });
         } else {
-            // Expired -> Delete from Map
             whitelist.delete(user);
         }
     }
     
-    return res.json({ verified: false, maintenance: false });
-});
+    return res.json({ allowed: false, verified: false, maintenance: false });
+}
 
-app.get('/', (req, res) => res.send("Milky API Online"));
+app.get('/check', handleCheck);
+app.get('/check-verify', handleCheck);
+app.get('/', (req, res) => res.send("Milky Hub API Online"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
