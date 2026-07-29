@@ -1,6 +1,8 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const express = require('express');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const client = new Client({
@@ -13,25 +15,38 @@ const client = new Client({
 
 // CONFIGURATION
 const CHANNEL_ID = process.env.VERIFY_CHANNEL_ID;
-const whitelist = new Set(); // Stores whitelisted usernames
-let maintenanceMode = false; // Maintenance mode flag
+const WHITELIST_FILE = path.join(__dirname, 'whitelist.json');
+let maintenanceMode = false;
 
-// ============================================
-// 📜 DEFINE SLASH COMMANDS
-// ============================================
+// Load or initialize whitelist JSON
+let whitelist = new Set();
+if (fs.existsSync(WHITELIST_FILE)) {
+    try {
+        const rawData = fs.readFileSync(WHITELIST_FILE);
+        const parsed = JSON.parse(rawData);
+        whitelist = new Set(parsed);
+        console.log(`Loaded ${whitelist.size} whitelisted users from storage.`);
+    } catch (e) {
+        console.error("Error reading whitelist.json:", e);
+    }
+}
+
+function saveWhitelist() {
+    try {
+        fs.writeFileSync(WHITELIST_FILE, JSON.stringify(Array.from(whitelist), null, 2));
+    } catch (e) {
+        console.error("Error saving whitelist.json:", e);
+    }
+}
+
+// REGISTER SLASH COMMANDS FOR ADMINS
 const commands = [
     new SlashCommandBuilder()
         .setName('users')
         .setDescription('Admin command to view user statistics')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addSubcommand(sub =>
-            sub.setName('total')
-                .setDescription('View the total number of whitelisted users')
-        )
-        .addSubcommand(sub =>
-            sub.setName('list')
-                .setDescription('View the list of all whitelisted usernames')
-        ),
+        .addSubcommand(sub => sub.setName('total').setDescription('Total whitelisted users'))
+        .addSubcommand(sub => sub.setName('list').setDescription('List all whitelisted usernames')),
 
     new SlashCommandBuilder()
         .setName('whitelist')
@@ -39,51 +54,53 @@ const commands = [
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .addSubcommand(sub =>
             sub.setName('add')
-                .setDescription('Manually add a Roblox user to whitelist')
+                .setDescription('Manually add user')
                 .addStringOption(opt => opt.setName('username').setDescription('Roblox Username').setRequired(true))
         )
         .addSubcommand(sub =>
             sub.setName('remove')
-                .setDescription('Remove a user from the whitelist')
+                .setDescription('Remove user')
                 .addStringOption(opt => opt.setName('username').setDescription('Roblox Username').setRequired(true))
         ),
 
     new SlashCommandBuilder()
         .setName('maintenance')
-        .setDescription('Toggle maintenance mode for the script')
+        .setDescription('Toggle maintenance mode')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addBooleanOption(opt => opt.setName('status').setDescription('Set maintenance true or false').setRequired(true))
+        .addBooleanOption(opt => opt.setName('status').setDescription('Set maintenance true/false').setRequired(true))
 ];
 
-// Register Slash Commands with Discord REST API
 async function registerSlashCommands() {
     try {
         const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-        console.log('Registering slash commands...');
-        await rest.put(
-            Routes.applicationCommands(client.user.id),
-            { body: commands }
-        );
-        console.log('Successfully registered global slash commands!');
+        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+        console.log('Slash commands registered successfully!');
     } catch (err) {
-        console.error('Failed to register slash commands:', err);
+        console.error('Failed to register commands:', err);
     }
 }
 
 client.on('ready', async () => {
-    console.log(`Logged in as ${client.user.tag}! Milky Auto-Verify API active.`);
+    console.log(`Logged in as ${client.user.tag}! Milky Verify API active.`);
     await registerSlashCommands();
 });
 
-// ============================================
-// 💬 CHAT VERIFICATION (TEXT CHANNEL)
-// ============================================
+// CHAT VERIFICATION HANDLER
+const userCooldowns = new Map();
+
 client.on('messageCreate', async (message) => {
     if (message.author.bot || message.channel.id !== CHANNEL_ID) return;
 
+    // Cooldown check (3 seconds per user)
+    const now = Date.now();
+    if (userCooldowns.has(message.author.id)) {
+        if (now - userCooldowns.get(message.author.id) < 3000) return;
+    }
+    userCooldowns.set(message.author.id, now);
+
     if (maintenanceMode) {
         await message.react('⚠️');
-        await message.reply("🛠️ **Script is currently under maintenance.** Please try again later!");
+        await message.reply("🛠️ **Script under maintenance.** Try again later!");
         return;
     }
 
@@ -93,13 +110,12 @@ client.on('messageCreate', async (message) => {
     const validFormat = /^[a-zA-Z0-9_]{3,20}$/.test(username);
     if (!validFormat) {
         await message.react('🚫');
-        await message.reply(`❌ **"${username}"** is not a valid Roblox username format.`);
         return;
     }
 
+    // Already Whitelisted -> React silently with ☑️
     if (whitelist.has(lowerUser)) {
         await message.react('☑️');
-        await message.reply(`ℹ️ **${username}** is already whitelisted! Launch your hub.`);
         return;
     }
 
@@ -111,74 +127,58 @@ client.on('messageCreate', async (message) => {
 
         if (response.data && response.data.data && response.data.data.length > 0) {
             whitelist.add(lowerUser);
+            saveWhitelist();
             await message.react('☑️');
-            await message.reply(`✅ **${username}** has been successfully whitelisted! Launch the hub now.`);
+            await message.reply(`✅ **${username}** whitelisted! Launch the hub now.`);
         } else {
             await message.react('🚫');
-            await message.reply(`❌ Roblox account **"${username}"** could not be found.`);
+            await message.reply(`❌ Account **"${username}"** not found.`);
         }
     } catch (error) {
-        console.error("Roblox API Error:", error.message);
+        console.error("Roblox API error:", error.message);
         await message.react('🚫');
     }
 });
 
-// ============================================
-// ⚡ SLASH COMMAND INTERACTION HANDLER
-// ============================================
+// SLASH COMMAND HANDLER
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-
-    // IMMEDIATE DEFERRAL TO PREVENT "APPLICATION DID NOT RESPOND" TIMEOUT
     await interaction.deferReply({ ephemeral: true });
 
     const { commandName, options } = interaction;
 
     if (commandName === 'users') {
-        const subcommand = options.getSubcommand();
-        if (subcommand === 'total') {
-            await interaction.editReply(`📊 **Total Whitelisted Users:** \`${whitelist.size}\``);
-        } else if (subcommand === 'list') {
-            const listArray = Array.from(whitelist);
-            const userList = listArray.length > 0 ? listArray.join(', ') : 'None';
-            await interaction.editReply(`📋 **Whitelisted Users (${whitelist.size}):**\n\`\`\`\n${userList}\n\`\`\``);
+        const sub = options.getSubcommand();
+        if (sub === 'total') {
+            await interaction.editReply(`📊 **Total Users:** \`${whitelist.size}\``);
+        } else if (sub === 'list') {
+            const list = Array.from(whitelist).join(', ') || 'None';
+            await interaction.editReply(`📋 **Users (${whitelist.size}):**\n\`\`\`\n${list}\n\`\`\``);
         }
-    }
+    } else if (commandName === 'whitelist') {
+        const sub = options.getSubcommand();
+        const user = options.getString('username').toLowerCase();
 
-    else if (commandName === 'whitelist') {
-        const subcommand = options.getSubcommand();
-        const username = options.getString('username').toLowerCase();
-
-        if (subcommand === 'add') {
-            whitelist.add(username);
-            await interaction.editReply(`✅ Successfully added **${username}** to the whitelist!`);
-        } else if (subcommand === 'remove') {
-            if (whitelist.has(username)) {
-                whitelist.delete(username);
-                await interaction.editReply(`🗑️ Removed **${username}** from the whitelist.`);
-            } else {
-                await interaction.editReply(`⚠️ User **${username}** was not in the whitelist.`);
-            }
+        if (sub === 'add') {
+            whitelist.add(user);
+            saveWhitelist();
+            await interaction.editReply(`✅ Added **${user}** to whitelist.`);
+        } else if (sub === 'remove') {
+            whitelist.delete(user);
+            saveWhitelist();
+            await interaction.editReply(`🗑️ Removed **${user}** from whitelist.`);
         }
-    }
-
-    else if (commandName === 'maintenance') {
-        const status = options.getBoolean('status');
-        maintenanceMode = status;
-        const stateStr = maintenanceMode ? "ENABLED 🛠️" : "DISABLED ✅";
-        await interaction.editReply(`🔧 Maintenance mode is now **${stateStr}**.`);
+    } else if (commandName === 'maintenance') {
+        maintenanceMode = options.getBoolean('status');
+        await interaction.editReply(`🔧 Maintenance: **${maintenanceMode ? 'ENABLED' : 'DISABLED'}**`);
     }
 });
 
-// ============================================
-// 🌐 WEB SERVER ENDPOINTS FOR ROBLOX
-// ============================================
+// WEB API FOR LUA SCRIPT POLLING
 app.get('/check-verify', (req, res) => {
     const user = (req.query.username || "").toLowerCase();
     
-    if (maintenanceMode) {
-        return res.json({ verified: false, maintenance: true });
-    }
+    if (maintenanceMode) return res.json({ verified: false, maintenance: true });
 
     if (whitelist.has(user)) {
         return res.json({ verified: true, maintenance: false });
@@ -186,11 +186,9 @@ app.get('/check-verify', (req, res) => {
     return res.json({ verified: false, maintenance: false });
 });
 
-app.get('/', (req, res) => {
-    res.send("Milky Verification Service Online!");
-});
+app.get('/', (req, res) => res.send("Milky API Online"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 client.login(process.env.DISCORD_TOKEN);
