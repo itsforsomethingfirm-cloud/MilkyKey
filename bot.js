@@ -80,7 +80,8 @@ client.on('interactionCreate', async (interaction) => {
     const { commandName, options, channelId } = interaction;
 
     if (commandName === 'v') {
-        await interaction.deferReply({ ephemeral: false });
+        // ONLY THE USER CAN SEE THIS RESPONSE NOW (ephemeral: true)
+        await interaction.deferReply({ ephemeral: true });
 
         if (CHANNEL_ID && channelId !== CHANNEL_ID) {
             const errEmbed = new EmbedBuilder()
