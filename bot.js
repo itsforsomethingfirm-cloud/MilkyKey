@@ -18,16 +18,18 @@ const CHANNEL_ID = process.env.VERIFY_CHANNEL_ID;
 const WHITELIST_FILE = path.join(__dirname, 'whitelist.json');
 let maintenanceMode = false;
 
-// Load or initialize whitelist JSON
+// Safe Whitelist Loader
 let whitelist = new Set();
 if (fs.existsSync(WHITELIST_FILE)) {
     try {
-        const rawData = fs.readFileSync(WHITELIST_FILE);
-        const parsed = JSON.parse(rawData);
-        whitelist = new Set(parsed);
-        console.log(`Loaded ${whitelist.size} whitelisted users from storage.`);
+        const rawData = fs.readFileSync(WHITELIST_FILE, 'utf8').trim();
+        if (rawData.length > 0) {
+            const parsed = JSON.parse(rawData);
+            whitelist = new Set(parsed);
+            console.log(`Loaded ${whitelist.size} whitelisted users from storage.`);
+        }
     } catch (e) {
-        console.error("Error reading whitelist.json:", e);
+        console.error("Warning: Could not parse whitelist.json, starting with empty whitelist:", e.message);
     }
 }
 
