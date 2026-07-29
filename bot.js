@@ -112,7 +112,7 @@ client.on('interactionCreate', async (interaction) => {
 
         const now = Date.now();
 
-        -- Check active whitelist
+        // Check active whitelist
         if (whitelist.has(lowerUser)) {
             const expireTime = whitelist.get(lowerUser);
             if (now < expireTime) {
