@@ -1,236 +1,101 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
-const express = require('express');
-const axios = require('axios');
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import axios from 'axios';
+import 'dotenv/config';
 
-const app = express();
+// Ensure required environment variables exist
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const RENDER_URL = process.env.RENDER_URL || "https://milkykey.onrender.com";
+const API_SECRET_KEY = process.env.API_SECRET_KEY || ""; // Optional secret key header for API protection
+
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages
-    ]
+    intents: [GatewayIntentBits.Guilds]
 });
 
-// HARDCODED CONFIGURATION
-const CHANNEL_ID = "1531387861591523558";
-let maintenanceMode = false;
-
-// 6-Hour Expiration Store
-const whitelist = new Map(); 
-const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-
-// REGISTER SLASH COMMANDS (/v)
+// Register Slash Commands
 const commands = [
     new SlashCommandBuilder()
         .setName('v')
-        .setDescription('Verify your Roblox username for 6 hours of access')
-        .addStringOption(opt => 
-            opt.setName('username')
-               .setDescription('Your exact Roblox Username')
-               .setRequired(true)
-        ),
-
-    new SlashCommandBuilder()
-        .setName('users')
-        .setDescription('Admin command to view user statistics')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addSubcommand(sub => sub.setName('total').setDescription('Total active 6h users'))
-        .addSubcommand(sub => sub.setName('list').setDescription('List active usernames')),
-
-    new SlashCommandBuilder()
-        .setName('whitelist')
-        .setDescription('Admin manual whitelist management')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addSubcommand(sub =>
-            sub.setName('add')
-                .setDescription('Manually add user for 6 hours')
-                .addStringOption(opt => opt.setName('username').setDescription('Roblox Username').setRequired(true))
+        .setDescription('Verify your Roblox username for Milky Hub access')
+        .addStringOption(option =>
+            option.setName('username')
+                .setDescription('Your exact Roblox username')
+                .setRequired(true)
         )
-        .addSubcommand(sub =>
-            sub.setName('remove')
-                .setDescription('Remove user from whitelist')
-                .addStringOption(opt => opt.setName('username').setDescription('Roblox Username').setRequired(true))
-        ),
+].map(command => command.toJSON());
 
-    new SlashCommandBuilder()
-        .setName('maintenance')
-        .setDescription('Toggle maintenance mode')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-        .addBooleanOption(opt => opt.setName('status').setDescription('Set maintenance true/false').setRequired(true))
-];
+const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
-async function registerSlashCommands() {
+(async () => {
     try {
-        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-        console.log('Slash command /v registered successfully!');
-    } catch (err) {
-        console.error('Failed to register slash commands:', err);
+        console.log('Registering application (/) commands...');
+        await rest.put(
+            Routes.applicationCommands(CLIENT_ID),
+            { body: commands }
+        );
+        console.log('Slash commands registered successfully!');
+    } catch (error) {
+        console.error('Error registering slash commands:', error);
     }
-}
+})();
 
-client.on('ready', async () => {
-    console.log(`Logged in as ${client.user.tag}! Listening in channel: ${CHANNEL_ID}`);
-    await registerSlashCommands();
+client.once('ready', () => {
+    console.log(`[Milky Hub Bot] Logged in as ${client.user.tag}`);
 });
 
-// DISCORD INTERACTION HANDLER
-client.on('interactionCreate', async (interaction) => {
+client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
-    const { commandName, options, channelId } = interaction;
+    if (interaction.commandName === 'v') {
+        const robloxUsername = interaction.options.getString('username').trim();
 
-    if (commandName === 'v') {
-        // ONLY THE USER CAN SEE THIS RESPONSE NOW (ephemeral: true)
         await interaction.deferReply({ ephemeral: true });
 
-        if (CHANNEL_ID && channelId !== CHANNEL_ID) {
-            const errEmbed = new EmbedBuilder()
-                .setColor('#FF3333')
-                .setTitle('⚠️ Channel Restricted')
-                .setDescription(`Please use the <#${CHANNEL_ID}> channel to verify!`);
-            return await interaction.editReply({ embeds: [errEmbed] });
-        }
-
-        if (maintenanceMode) {
-            const maintEmbed = new EmbedBuilder()
-                .setColor('#FFA500')
-                .setTitle('🛠️ Maintenance Mode')
-                .setDescription('Script is currently under maintenance. Please try again later!');
-            return await interaction.editReply({ embeds: [maintEmbed] });
-        }
-
-        const username = options.getString('username').trim();
-        const lowerUser = username.toLowerCase();
-
-        const validFormat = /^[a-zA-Z0-9_]{3,20}$/.test(username);
-        if (!validFormat) {
-            const invalidEmbed = new EmbedBuilder()
-                .setColor('#FF3333')
-                .setTitle('❌ Invalid Username')
-                .setDescription(`Roblox user **${username}** is not a valid Roblox username.`);
-            return await interaction.editReply({ embeds: [invalidEmbed] });
-        }
-
-        const now = Date.now();
-
-        // Check active whitelist
-        if (whitelist.has(lowerUser)) {
-            const expireTime = whitelist.get(lowerUser);
-            if (now < expireTime) {
-                const unixSeconds = Math.floor(expireTime / 1000);
-                const alreadyEmbed = new EmbedBuilder()
-                    .setColor('#00E676')
-                    .setTitle('✅ Access Already Granted!')
-                    .setDescription(`Roblox user **${username}** is already whitelisted.`)
-                    .addFields({ name: 'Expires', value: `<t:${unixSeconds}:R>` });
-                return await interaction.editReply({ embeds: [alreadyEmbed] });
-            }
-        }
-
-        // Verify with Roblox API
         try {
-            const response = await axios.post('https://users.roblox.com/v1/usernames/users', {
-                usernames: [username],
-                excludeBannedUsers: true
-            }, { timeout: 4000 });
+            // Send verification request to your Render API endpoint
+            const response = await axios.post(`${RENDER_URL}/verify`, {
+                username: robloxUsername,
+                discordId: interaction.user.id,
+                discordTag: interaction.user.tag
+            }, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined
+                },
+                timeout: 10000
+            });
 
-            if (response.data && response.data.data && response.data.data.length > 0) {
-                const expireTimestamp = Date.now() + SIX_HOURS_MS;
-                const unixSeconds = Math.floor(expireTimestamp / 1000);
-                whitelist.set(lowerUser, expireTimestamp);
+            if (response.data && (response.data.success || response.data.verified)) {
+                const successEmbed = new EmbedBuilder()
+                    .setTitle(' Verification Successful!')
+                    .setColor(0x00FF96)
+                    .setDescription(`Account **${robloxUsername}** has been successfully verified for **Milky Hub**.`)
+                    .addFields({ name: 'Status', value: 'Return to Roblox. Your hub will auto-load momentarily!' })
+                    .setFooter({ text: 'Milky Hub Verification System' })
+                    .setTimestamp();
 
-                const grantedEmbed = new EmbedBuilder()
-                    .setColor('#00E676')
-                    .setTitle('✅ Access Granted!')
-                    .setDescription(`Roblox user **${username}** whitelisted for **6 hours**.`)
-                    .addFields({ name: 'Expires', value: `<t:${unixSeconds}:R>` });
-
-                return await interaction.editReply({ embeds: [grantedEmbed] });
+                await interaction.editReply({ embeds: [successEmbed] });
             } else {
-                const notFoundEmbed = new EmbedBuilder()
-                    .setColor('#FF3333')
-                    .setTitle('❌ Account Not Found')
-                    .setDescription(`Roblox user **${username}** does not exist.`);
-                return await interaction.editReply({ embeds: [notFoundEmbed] });
+                const failEmbed = new EmbedBuilder()
+                    .setTitle(' Verification Failed')
+                    .setColor(0xFF5050)
+                    .setDescription(response.data.message || 'Could not process verification at this time.')
+                    .setFooter({ text: 'Milky Hub Verification System' });
+
+                await interaction.editReply({ embeds: [failEmbed] });
             }
         } catch (error) {
-            // Fallback whitelist
-            const expireTimestamp = Date.now() + SIX_HOURS_MS;
-            const unixSeconds = Math.floor(expireTimestamp / 1000);
-            whitelist.set(lowerUser, expireTimestamp);
+            console.error('API Error during verification:', error.message);
 
-            const grantedEmbed = new EmbedBuilder()
-                .setColor('#00E676')
-                .setTitle('✅ Access Granted!')
-                .setDescription(`Roblox user **${username}** whitelisted for **6 hours**.`)
-                .addFields({ name: 'Expires', value: `<t:${unixSeconds}:R>` });
+            const errorEmbed = new EmbedBuilder()
+                .setTitle(' Server Error')
+                .setColor(0xFF3300)
+                .setDescription('Failed to reach the verification server. Please ensure the server is online and try again.')
+                .setFooter({ text: 'Milky Hub Engine' });
 
-            return await interaction.editReply({ embeds: [grantedEmbed] });
+            await interaction.editReply({ embeds: [errorEmbed] });
         }
-    }
-
-    // ADMIN COMMANDS
-    if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferReply({ ephemeral: true });
-    }
-
-    if (commandName === 'users') {
-        const sub = options.getSubcommand();
-        const now = Date.now();
-        const activeUsers = [];
-        whitelist.forEach((exp, user) => {
-            if (now < exp) activeUsers.push(user);
-        });
-
-        if (sub === 'total') {
-            await interaction.editReply(`📊 **Active 6h Users:** \`${activeUsers.length}\``);
-        } else if (sub === 'list') {
-            const list = activeUsers.join(', ') || 'None';
-            await interaction.editReply(`📋 **Active Whitelisted Users (${activeUsers.length}):**\n\`\`\`\n${list}\n\`\`\``);
-        }
-    } else if (commandName === 'whitelist') {
-        const sub = options.getSubcommand();
-        const user = options.getString('username').toLowerCase();
-
-        if (sub === 'add') {
-            whitelist.set(user, Date.now() + SIX_HOURS_MS);
-            await interaction.editReply(`✅ Granted 6 hours access to **${user}**.`);
-        } else if (sub === 'remove') {
-            whitelist.delete(user);
-            await interaction.editReply(`🗑️ Removed **${user}** from whitelist.`);
-        }
-    } else if (commandName === 'maintenance') {
-        maintenanceMode = options.getBoolean('status');
-        await interaction.editReply(`🔧 Maintenance mode set to: **${maintenanceMode ? 'ENABLED' : 'DISABLED'}**`);
     }
 });
 
-// WEB API FOR ROBLOX SCRIPT POLLING
-function handleCheck(req, res) {
-    const rawUser = req.query.user || req.query.username || "";
-    const user = rawUser.trim().toLowerCase();
-    
-    if (maintenanceMode) {
-        return res.json({ allowed: false, verified: false, maintenance: true });
-    }
-
-    if (user && whitelist.has(user)) {
-        const expireTime = whitelist.get(user);
-        if (Date.now() < expireTime) {
-            return res.json({ allowed: true, verified: true, maintenance: false });
-        } else {
-            whitelist.delete(user);
-        }
-    }
-    
-    return res.json({ allowed: false, verified: false, maintenance: false });
-}
-
-app.get('/check', handleCheck);
-app.get('/check-verify', handleCheck);
-app.get('/', (req, res) => res.send("Milky Hub API Online"));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
-
-client.login(process.env.DISCORD_TOKEN);
+client.login(DISCORD_TOKEN);
