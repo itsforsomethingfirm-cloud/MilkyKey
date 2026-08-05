@@ -10,20 +10,62 @@ const RENDER_URL = process.env.RENDER_URL || "https://milkykey.onrender.com";
 const API_SECRET_KEY = process.env.API_SECRET_KEY || "";
 const PORT = process.env.PORT || 3000;
 
+// In-memory store for verified users (Roblox Username -> Verification Status)
+const verifiedUsers = new Map();
+
 // ============================================
-// 🌐 EXPRESS WEB SERVER & SELF-PING (KEEP-ALIVE)
+// 🌐 EXPRESS WEB SERVER & API ENDPOINTS
 // ============================================
 const app = express();
+app.use(express.json());
 
+// Health Check Endpoint (Keep-Alive)
 app.get('/', (req, res) => {
-    res.send('Server is active and online.');
+    res.send('Milky Hub Verification Server is Online.');
+});
+
+// Roblox Verification Status Check (GET /check?user=Username)
+app.get('/check', (req, res) => {
+    const username = req.query.user;
+    if (!username) {
+        return res.json({ allowed: false, verified: false });
+    }
+
+    const isVerified = verifiedUsers.get(username.toLowerCase());
+    return res.json({
+        allowed: !!isVerified,
+        verified: !!isVerified
+    });
+});
+
+// Discord Bot Verification Receiver (POST /verify)
+app.post('/verify', (req, res) => {
+    const { username, discordId } = req.body;
+
+    if (!username) {
+        return res.status(400).json({ success: false, message: "Missing Roblox username." });
+    }
+
+    // Mark user as verified
+    verifiedUsers.set(username.toLowerCase(), {
+        discordId: discordId,
+        timestamp: Date.now()
+    });
+
+    console.log(`[Verification] Verified Roblox account: ${username} (Discord ID: ${discordId})`);
+
+    return res.json({
+        success: true,
+        verified: true,
+        message: `Account ${username} successfully verified!`
+    });
 });
 
 app.listen(PORT, () => {
     console.log(`[Web Server] Express listening on port ${PORT}`);
 });
 
-// Periodically ping the endpoint every 4 minutes to prevent Render free-tier sleep
+// Periodically ping self every 4 minutes to prevent Render free-tier sleep
 if (RENDER_URL) {
     setInterval(async () => {
         try {
@@ -69,7 +111,7 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     }
 })();
 
-client.once('ready', () => {
+client.once('clientReady', () => {
     console.log(`[Bot Engine] Logged in as ${client.user.tag}`);
 });
 
@@ -79,11 +121,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.commandName === 'v') {
         const robloxUsername = interaction.options.getString('username').trim();
 
-        // Use MessageFlags.Ephemeral instead of deprecated ephemeral property
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-        // Optional ping check to wake endpoint if needed before verification call
-        pcallPing(RENDER_URL);
 
         try {
             const response = await axios.post(`${RENDER_URL}/verify`, {
@@ -127,9 +165,5 @@ client.on('interactionCreate', async interaction => {
         }
     }
 });
-
-function pcallPing(url) {
-    axios.get(url).catch(() => {});
-}
 
 client.login(DISCORD_TOKEN);
