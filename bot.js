@@ -1,13 +1,43 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
 import axios from 'axios';
+import express from 'express';
 import 'dotenv/config';
 
 // Ensure required environment variables exist
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const RENDER_URL = process.env.RENDER_URL || "https://milkykey.onrender.com";
-const API_SECRET_KEY = process.env.API_SECRET_KEY || ""; // Optional secret key header for API protection
+const API_SECRET_KEY = process.env.API_SECRET_KEY || "";
+const PORT = process.env.PORT || 3000;
 
+// ============================================
+// 🌐 EXPRESS WEB SERVER & SELF-PING (KEEP-ALIVE)
+// ============================================
+const app = express();
+
+app.get('/', (req, res) => {
+    res.send('Server is active and online.');
+});
+
+app.listen(PORT, () => {
+    console.log(`[Web Server] Express listening on port ${PORT}`);
+});
+
+// Periodically ping the endpoint every 4 minutes to prevent Render free-tier sleep
+if (RENDER_URL) {
+    setInterval(async () => {
+        try {
+            await axios.get(RENDER_URL);
+            console.log('[Keep-Alive] Self-ping successful.');
+        } catch (err) {
+            console.error('[Keep-Alive] Self-ping failed:', err.message);
+        }
+    }, 4 * 60 * 1000);
+}
+
+// ============================================
+// 🤖 DISCORD BOT INITIALIZATION
+// ============================================
 const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
@@ -16,7 +46,7 @@ const client = new Client({
 const commands = [
     new SlashCommandBuilder()
         .setName('v')
-        .setDescription('Verify your Roblox username for Milky Hub access')
+        .setDescription('Verify your Roblox username for access')
         .addStringOption(option =>
             option.setName('username')
                 .setDescription('Your exact Roblox username')
@@ -40,7 +70,7 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 })();
 
 client.once('ready', () => {
-    console.log(`[Milky Hub Bot] Logged in as ${client.user.tag}`);
+    console.log(`[Bot Engine] Logged in as ${client.user.tag}`);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -49,10 +79,13 @@ client.on('interactionCreate', async interaction => {
     if (interaction.commandName === 'v') {
         const robloxUsername = interaction.options.getString('username').trim();
 
-        await interaction.deferReply({ ephemeral: true });
+        // Use MessageFlags.Ephemeral instead of deprecated ephemeral property
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        // Optional ping check to wake endpoint if needed before verification call
+        pcallPing(RENDER_URL);
 
         try {
-            // Send verification request to your Render API endpoint
             const response = await axios.post(`${RENDER_URL}/verify`, {
                 username: robloxUsername,
                 discordId: interaction.user.id,
@@ -69,9 +102,8 @@ client.on('interactionCreate', async interaction => {
                 const successEmbed = new EmbedBuilder()
                     .setTitle(' Verification Successful!')
                     .setColor(0x00FF96)
-                    .setDescription(`Account **${robloxUsername}** has been successfully verified for **Milky Hub**.`)
-                    .addFields({ name: 'Status', value: 'Return to Roblox. Your hub will auto-load momentarily!' })
-                    .setFooter({ text: 'Milky Hub Verification System' })
+                    .setDescription(`Account **${robloxUsername}** has been successfully verified.`)
+                    .addFields({ name: 'Status', value: 'Return to application. Verification confirmed!' })
                     .setTimestamp();
 
                 await interaction.editReply({ embeds: [successEmbed] });
@@ -79,8 +111,7 @@ client.on('interactionCreate', async interaction => {
                 const failEmbed = new EmbedBuilder()
                     .setTitle(' Verification Failed')
                     .setColor(0xFF5050)
-                    .setDescription(response.data.message || 'Could not process verification at this time.')
-                    .setFooter({ text: 'Milky Hub Verification System' });
+                    .setDescription(response.data.message || 'Could not process verification at this time.');
 
                 await interaction.editReply({ embeds: [failEmbed] });
             }
@@ -90,12 +121,15 @@ client.on('interactionCreate', async interaction => {
             const errorEmbed = new EmbedBuilder()
                 .setTitle(' Server Error')
                 .setColor(0xFF3300)
-                .setDescription('Failed to reach the verification server. Please ensure the server is online and try again.')
-                .setFooter({ text: 'Milky Hub Engine' });
+                .setDescription('Failed to reach the verification server. Please ensure the backend is active.');
 
             await interaction.editReply({ embeds: [errorEmbed] });
         }
     }
 });
+
+function pcallPing(url) {
+    axios.get(url).catch(() => {});
+}
 
 client.login(DISCORD_TOKEN);
