@@ -3,15 +3,56 @@ import axios from 'axios';
 import express from 'express';
 import 'dotenv/config';
 
-// Ensure required environment variables exist
+// Environment Variables
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const RENDER_URL = process.env.RENDER_URL || "https://milkykey.onrender.com";
-const API_SECRET_KEY = process.env.API_SECRET_KEY || "";
 const PORT = process.env.PORT || 3000;
 
-// In-memory store for verified users (Roblox Username -> Verification Status)
+// Expiration Duration: 6 Hours in milliseconds
+const VERIFICATION_DURATION_MS = 6 * 60 * 60 * 1000;
+
+// In-memory store for verified users
+// Key: username (lowercase) -> Value: { discordId, verifiedAt, expiresAt }
 const verifiedUsers = new Map();
+
+// ============================================
+// 🌐 HELPER FUNCTIONS
+// ============================================
+
+/**
+ * Checks if a Roblox username exists using Roblox's public API.
+ * Returns the user object if valid, or null if invalid.
+ */
+async function getRobloxUserInfo(username) {
+    try {
+        const response = await axios.post('https://users.roblox.com/v1/usernames/users', {
+            usernames: [username],
+            excludeBannedUsers: false
+        }, { timeout: 5000 });
+
+        if (response.data && response.data.data && response.data.data.length > 0) {
+            return response.data.data[0]; // Returns { id, name, displayName }
+        }
+    } catch (err) {
+        console.error('Roblox API Lookup Error:', err.message);
+    }
+    return null;
+}
+
+/**
+ * Formats milliseconds into human-readable hours and minutes.
+ */
+function formatTimeRemaining(ms) {
+    const totalMinutes = Math.floor(ms / (1000 * 60));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+}
 
 // ============================================
 // 🌐 EXPRESS WEB SERVER & API ENDPOINTS
@@ -19,60 +60,103 @@ const verifiedUsers = new Map();
 const app = express();
 app.use(express.json());
 
-// Health Check Endpoint (Keep-Alive)
 app.get('/', (req, res) => {
-    res.send('Milky Hub Verification Server is Online.');
+    res.send('Milky Hub Verification Server Online');
 });
 
-// Roblox Verification Status Check (GET /check?user=Username)
+// Endpoint used by client scripts to check whitelist status
 app.get('/check', (req, res) => {
     const username = req.query.user;
     if (!username) {
         return res.json({ allowed: false, verified: false });
     }
 
-    const isVerified = verifiedUsers.get(username.toLowerCase());
-    return res.json({
-        allowed: !!isVerified,
-        verified: !!isVerified
-    });
+    const record = verifiedUsers.get(username.toLowerCase());
+    const now = Date.now();
+
+    if (record && now < record.expiresAt) {
+        return res.json({
+            allowed: true,
+            verified: true,
+            expiresInMs: record.expiresAt - now
+        });
+    }
+
+    // Clean up expired record if present
+    if (record && now >= record.expiresAt) {
+        verifiedUsers.delete(username.toLowerCase());
+    }
+
+    return res.json({ allowed: false, verified: false });
 });
 
-// Discord Bot Verification Receiver (POST /verify)
-app.post('/verify', (req, res) => {
+// Verification Endpoint called by Discord Bot
+app.post('/verify', async (req, res) => {
     const { username, discordId } = req.body;
 
     if (!username) {
-        return res.status(400).json({ success: false, message: "Missing Roblox username." });
+        return res.status(400).json({ success: false, code: 'MISSING_USERNAME', message: 'Username is required.' });
     }
 
-    // Mark user as verified
-    verifiedUsers.set(username.toLowerCase(), {
-        discordId: discordId,
-        timestamp: Date.now()
+    const cleanUsername = username.trim();
+    const userKey = cleanUsername.toLowerCase();
+    const now = Date.now();
+
+    // 1. Check if user is already verified and key is still active
+    const existingRecord = verifiedUsers.get(userKey);
+    if (existingRecord && now < existingRecord.expiresAt) {
+        const remainingMs = existingRecord.expiresAt - now;
+        return res.json({
+            success: false,
+            code: 'ALREADY_VERIFIED',
+            message: `Account is already verified!`,
+            timeRemaining: formatTimeRemaining(remainingMs),
+            expiresAt: existingRecord.expiresAt
+        });
+    }
+
+    // 2. Validate Roblox Username via Roblox API
+    const robloxUser = await getRobloxUserInfo(cleanUsername);
+    if (!robloxUser) {
+        return res.status(400).json({
+            success: false,
+            code: 'INVALID_ROBLOX_USER',
+            message: `The Roblox username **"${cleanUsername}"** does not exist.`
+        });
+    }
+
+    // 3. Register standard 6-hour verification
+    const expiresAt = now + VERIFICATION_DURATION_MS;
+    verifiedUsers.set(userKey, {
+        discordId,
+        robloxId: robloxUser.id,
+        exactName: robloxUser.name,
+        verifiedAt: now,
+        expiresAt
     });
 
-    console.log(`[Verification] Verified Roblox account: ${username} (Discord ID: ${discordId})`);
+    console.log(`[Verified] ${robloxUser.name} (ID: ${robloxUser.id}) by Discord User ${discordId} for 6 hours.`);
 
     return res.json({
         success: true,
-        verified: true,
-        message: `Account ${username} successfully verified!`
+        code: 'VERIFIED',
+        exactName: robloxUser.name,
+        timeRemaining: '6h 0m',
+        expiresAt
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`[Web Server] Express listening on port ${PORT}`);
+    console.log(`[Web Server] Express running on port ${PORT}`);
 });
 
-// Periodically ping self every 4 minutes to prevent Render free-tier sleep
+// Self-ping loop to prevent free-tier inactivity sleeping
 if (RENDER_URL) {
     setInterval(async () => {
         try {
             await axios.get(RENDER_URL);
-            console.log('[Keep-Alive] Self-ping successful.');
         } catch (err) {
-            console.error('[Keep-Alive] Self-ping failed:', err.message);
+            // Silence network ping errors
         }
     }, 4 * 60 * 1000);
 }
@@ -84,11 +168,10 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
-// Register Slash Commands
 const commands = [
     new SlashCommandBuilder()
         .setName('v')
-        .setDescription('Verify your Roblox username for access')
+        .setDescription('Verify your Roblox username for 6 hours of access')
         .addStringOption(option =>
             option.setName('username')
                 .setDescription('Your exact Roblox username')
@@ -100,12 +183,12 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
 (async () => {
     try {
-        console.log('Registering application (/) commands...');
+        console.log('Registering slash commands...');
         await rest.put(
             Routes.applicationCommands(CLIENT_ID),
             { body: commands }
         );
-        console.log('Slash commands registered successfully!');
+        console.log('Slash commands registered successfully.');
     } catch (error) {
         console.error('Error registering slash commands:', error);
     }
@@ -126,42 +209,63 @@ client.on('interactionCreate', async interaction => {
         try {
             const response = await axios.post(`${RENDER_URL}/verify`, {
                 username: robloxUsername,
-                discordId: interaction.user.id,
-                discordTag: interaction.user.tag
+                discordId: interaction.user.id
             }, {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined
-                },
                 timeout: 10000
             });
 
-            if (response.data && (response.data.success || response.data.verified)) {
+            const data = response.data;
+
+            if (data.success) {
                 const successEmbed = new EmbedBuilder()
-                    .setTitle(' Verification Successful!')
+                    .setTitle('✅ Verification Successful!')
                     .setColor(0x00FF96)
-                    .setDescription(`Account **${robloxUsername}** has been successfully verified.`)
-                    .addFields({ name: 'Status', value: 'Return to application. Verification confirmed!' })
+                    .setDescription(`Account **${data.exactName}** is now verified.`)
+                    .addFields(
+                        { name: 'Duration', value: '6 Hours', inline: true },
+                        { name: 'Time Remaining', value: data.timeRemaining, inline: true }
+                    )
+                    .setFooter({ text: 'Milky Hub Access Control' })
                     .setTimestamp();
 
                 await interaction.editReply({ embeds: [successEmbed] });
-            } else {
-                const failEmbed = new EmbedBuilder()
-                    .setTitle(' Verification Failed')
-                    .setColor(0xFF5050)
-                    .setDescription(response.data.message || 'Could not process verification at this time.');
-
-                await interaction.editReply({ embeds: [failEmbed] });
             }
         } catch (error) {
-            console.error('API Error during verification:', error.message);
+            if (error.response && error.response.data) {
+                const errData = error.response.data;
 
-            const errorEmbed = new EmbedBuilder()
-                .setTitle(' Server Error')
-                .setColor(0xFF3300)
-                .setDescription('Failed to reach the verification server. Please ensure the backend is active.');
+                if (errData.code === 'ALREADY_VERIFIED') {
+                    const alreadyEmbed = new EmbedBuilder()
+                        .setTitle('ℹ️ Already Verified')
+                        .setColor(0x00BFFF)
+                        .setDescription(`Account **${robloxUsername}** is currently active.`)
+                        .addFields(
+                            { name: 'Time Remaining', value: errData.timeRemaining || 'Active', inline: true }
+                        )
+                        .setFooter({ text: 'Milky Hub Access Control' });
 
-            await interaction.editReply({ embeds: [errorEmbed] });
+                    return await interaction.editReply({ embeds: [alreadyEmbed] });
+                }
+
+                if (errData.code === 'INVALID_ROBLOX_USER') {
+                    const invalidEmbed = new EmbedBuilder()
+                        .setTitle('❌ Invalid Username')
+                        .setColor(0xFF3300)
+                        .setDescription(`The Roblox user **"${robloxUsername}"** could not be found. Please check spelling and try again.`)
+                        .setFooter({ text: 'Milky Hub Access Control' });
+
+                    return await interaction.editReply({ embeds: [invalidEmbed] });
+                }
+            }
+
+            console.error('Verification Error:', error.message);
+            const serverErrEmbed = new EmbedBuilder()
+                .setTitle('⚠️ Verification Error')
+                .setColor(0xFF9900)
+                .setDescription('Failed to complete verification request. Please try again in a few moments.')
+                .setFooter({ text: 'Milky Hub System' });
+
+            await interaction.editReply({ embeds: [serverErrEmbed] });
         }
     }
 });
