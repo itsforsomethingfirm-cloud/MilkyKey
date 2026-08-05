@@ -3,12 +3,14 @@
   "version": "1.0.0",
   "description": "Milky Scripts Auto-Verification & Whitelist Bot",
   "main": "bot.js",
+  "type": "module",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
     "axios": "^1.7.9",
     "discord.js": "^14.18.0",
+    "dotenv": "^16.4.5",
     "express": "^4.21.2"
   },
   "engines": {
