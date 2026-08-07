@@ -1,4 +1,14 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { 
+    Client, 
+    GatewayIntentBits, 
+    REST, 
+    Routes, 
+    SlashCommandBuilder, 
+    EmbedBuilder, 
+    PermissionFlagsBits,
+    MessageFlags,
+    Events 
+} from 'discord.js';
 import axios from 'axios';
 import 'dotenv/config';
 
@@ -12,7 +22,12 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
-// Helper: Format milliseconds into readable duration (e.g., "12d 4h 30m")
+// Prevent global process crash from unhandled interaction rejections
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Helper: Format milliseconds into readable duration
 function formatTimeRemaining(ms) {
     if (ms <= 0) return "Expired";
     const seconds = Math.floor((ms / 1000) % 60);
@@ -30,7 +45,6 @@ function formatTimeRemaining(ms) {
 
 // Slash Command Definitions
 const commands = [
-    // /v command
     new SlashCommandBuilder()
         .setName('v')
         .setDescription('Verify or check status for your Roblox username')
@@ -39,14 +53,10 @@ const commands = [
                 .setDescription('Your exact Roblox username')
                 .setRequired(true)
         ),
-    
-    // /admin-stats dashboard command (Admin only)
     new SlashCommandBuilder()
         .setName('admin-stats')
         .setDescription('Dashboard to check active user counts and script usage statistics')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-    // /whitelist command to grant keys/time manually (Admin only)
     new SlashCommandBuilder()
         .setName('whitelist')
         .setDescription('Manually whitelist a user or add days')
@@ -78,11 +88,12 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     }
 })();
 
-client.once('ready', () => {
+// Updated to Events.ClientReady to satisfy deprecation notice
+client.once(Events.ClientReady, () => {
     console.log(`[Milky Hub Bot] Online as ${client.user.tag}`);
 });
 
-client.on('interactionCreate', async interaction => {
+client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     // -------------------------------------------------------------
@@ -91,12 +102,18 @@ client.on('interactionCreate', async interaction => {
     if (interaction.commandName === 'v') {
         const robloxUsername = interaction.options.getString('username').trim();
 
-        // Enforce private message so only the command runner can see it
-        await interaction.deferReply({ ephemeral: true });
+        // Safely attempt to defer reply using the updated MessageFlags
+        try {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        } catch (err) {
+            console.error('Interaction deferral failed (likely timed out):', err.message);
+            return; // Interaction expired, abort execution
+        }
 
-        // Step 1: Validate Roblox username exists via Roblox Official Web API
         let rbxUserId = null;
         let rbxDisplayName = null;
+
+        // Step 1: Check Roblox API
         try {
             const rbxCheck = await axios.post('https://users.roblox.com/v1/usernames/users', {
                 usernames: [robloxUsername],
@@ -117,7 +134,6 @@ client.on('interactionCreate', async interaction => {
             }
         } catch (err) {
             console.error('Roblox User Check API Error:', err.message);
-            // Fallback: Proceed if Roblox API rate limits, but log it
         }
 
         // Step 2: Request backend verification status
@@ -137,7 +153,6 @@ client.on('interactionCreate', async interaction => {
 
             const data = response.data;
 
-            // Scenario A: User is ALREADY Verified
             if (data.alreadyVerified || data.status === "already_verified") {
                 const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
                 const msRemaining = expiresAt ? expiresAt.getTime() - Date.now() : null;
@@ -158,7 +173,6 @@ client.on('interactionCreate', async interaction => {
                 return await interaction.editReply({ embeds: [alreadyEmbed] });
             }
 
-            // Scenario B: Newly Verified
             if (data.success || data.verified) {
                 const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
                 const msRemaining = expiresAt ? expiresAt.getTime() - Date.now() : null;
@@ -179,11 +193,10 @@ client.on('interactionCreate', async interaction => {
                 return await interaction.editReply({ embeds: [successEmbed] });
             }
 
-            // Scenario C: General rejection / maintenance from server
             const failEmbed = new EmbedBuilder()
                 .setTitle(' Verification Issue')
                 .setColor(0xFFAA00)
-                .setDescription(data.message || 'Could not verify your access right now. You may need a key or active subscription.')
+                .setDescription(data.message || 'Could not verify your access right now.')
                 .setFooter({ text: 'Milky Hub Verification' });
 
             return await interaction.editReply({ embeds: [failEmbed] });
@@ -193,7 +206,7 @@ client.on('interactionCreate', async interaction => {
             const errorEmbed = new EmbedBuilder()
                 .setTitle(' Backend Unavailable')
                 .setColor(0xFF0000)
-                .setDescription('Failed to connect to the backend server (`milkykey.onrender.com`). It might be waking up from sleep mode—try again in 10 seconds.')
+                .setDescription('Failed to connect to the backend server (`milkykey.onrender.com`). If it was sleeping, try again in 10 seconds.')
                 .setFooter({ text: 'Milky Hub Engine' });
 
             return await interaction.editReply({ embeds: [errorEmbed] });
@@ -201,10 +214,14 @@ client.on('interactionCreate', async interaction => {
     }
 
     // -------------------------------------------------------------
-    // COMMAND: /admin-stats (Dashboard Overview)
+    // COMMAND: /admin-stats
     // -------------------------------------------------------------
     if (interaction.commandName === 'admin-stats') {
-        await interaction.deferReply({ ephemeral: true });
+        try {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        } catch (err) {
+            return;
+        }
 
         try {
             const statsRes = await axios.get(`${RENDER_URL}/stats`, {
@@ -217,7 +234,6 @@ client.on('interactionCreate', async interaction => {
             const dashEmbed = new EmbedBuilder()
                 .setTitle(' Milky Hub Live Dashboard')
                 .setColor(0x7289DA)
-                .setDescription('Real-time statistics from the backend server.')
                 .addFields(
                     { name: ' Total Whitelisted Users', value: `\`${s.totalUsers || 0}\``, inline: true },
                     { name: ' Active Sessions Now', value: `\`${s.activeNow || 0}\``, inline: true },
@@ -229,27 +245,25 @@ client.on('interactionCreate', async interaction => {
 
             await interaction.editReply({ embeds: [dashEmbed] });
         } catch (err) {
-            const errEmbed = new EmbedBuilder()
-                .setTitle(' Dashboard Fetch Failed')
-                .setColor(0xFF0000)
-                .setDescription('Could not fetch stats from backend endpoint `/stats`. Ensure your Render app exposes this route.')
-                .setFooter({ text: 'Milky Hub Dashboard' });
-
-            await interaction.editReply({ embeds: [errEmbed] });
+            await interaction.editReply({ content: 'Could not fetch stats from backend server.' });
         }
     }
 
     // -------------------------------------------------------------
-    // COMMAND: /whitelist {username} [days]
+    // COMMAND: /whitelist
     // -------------------------------------------------------------
     if (interaction.commandName === 'whitelist') {
-        await interaction.deferReply({ ephemeral: true });
+        try {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        } catch (err) {
+            return;
+        }
 
         const targetUser = interaction.options.getString('username').trim();
         const days = interaction.options.getInteger('days') || 30;
 
         try {
-            const response = await axios.post(`${RENDER_URL}/admin/whitelist`, {
+            await axios.post(`${RENDER_URL}/admin/whitelist`, {
                 username: targetUser,
                 days: days
             }, {
@@ -259,7 +273,7 @@ client.on('interactionCreate', async interaction => {
             const wlEmbed = new EmbedBuilder()
                 .setTitle(' User Whitelisted')
                 .setColor(0x00FF96)
-                .setDescription(`Successfully granted **\`${days}\` days** of access to **\`${targetUser}\`**.`)
+                .setDescription(`Granted **\`${days}\` days** of access to **\`${targetUser}\`**.`)
                 .setTimestamp();
 
             await interaction.editReply({ embeds: [wlEmbed] });
