@@ -1,3 +1,4 @@
+import express from 'express';
 import { 
     Client, 
     GatewayIntentBits, 
@@ -12,7 +13,23 @@ import {
 import axios from 'axios';
 import 'dotenv/config';
 
-// Environment variables
+// -------------------------------------------------------------------------
+// 1. EXPRESS PORT BINDING (Satisfies Render Web Service Port Requirement)
+// -------------------------------------------------------------------------
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.use(express.json());
+
+app.get('/', (req, res) => {
+    res.status(200).send('Milky Hub Discord Bot & Web Service is Active!');
+});
+
+app.listen(PORT, () => {
+    console.log(`[Web Server] Express running on port ${PORT}`);
+});
+
+// Environment Variables
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const RENDER_URL = process.env.RENDER_URL || "https://milkykey.onrender.com";
@@ -22,33 +39,20 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
-// Fail-safe to prevent unexpected promise rejections from crashing the bot
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('[Safety Net] Unhandled Rejection at:', promise, 'reason:', reason);
+// -------------------------------------------------------------------------
+// 2. CRASH PREVENTION HANDLERS (Prevents Node.js from exiting)
+// -------------------------------------------------------------------------
+// Catch client-level errors emitted by discord.js (Fixes Code 10062 crashes)
+client.on('error', (error) => {
+    console.warn('[Discord Client Handled Error]:', error?.message || error);
 });
 
-// =========================================================================
-// SELF-PINGING KEEPALIVE ENGINE (Keeps Render Server Awake 24/7)
-// =========================================================================
-function startKeepAlive() {
-    const PING_INTERVAL = 5 * 60 * 1000; // 5 Minutes in milliseconds
+// Catch general process unhandled rejections
+process.on('unhandledRejection', (reason) => {
+    console.warn('[Process Handled Rejection]:', reason?.message || reason);
+});
 
-    console.log(`[KeepAlive] Initialized self-pinging engine for: ${RENDER_URL}`);
-
-    setInterval(async () => {
-        try {
-            const res = await axios.get(`${RENDER_URL}/`, {
-                timeout: 10000,
-                headers: { 'User-Agent': 'MilkyBot-KeepAlive/1.0' }
-            });
-            console.log(`[KeepAlive Ping] Server pinged successfully! Status: ${res.status} (${new Date().toLocaleTimeString()})`);
-        } catch (err) {
-            console.warn(`[KeepAlive Ping Warning] Server wake ping status: ${err.message}`);
-        }
-    }, PING_INTERVAL);
-}
-
-// Helper: Format milliseconds into readable duration (e.g., "12d 4h 30m")
+// Helper: Format milliseconds into readable duration
 function formatTimeRemaining(ms) {
     if (ms <= 0) return "Expired";
     const seconds = Math.floor((ms / 1000) % 60);
@@ -64,7 +68,21 @@ function formatTimeRemaining(ms) {
     return parts.join(' ') || '0s';
 }
 
-// Slash Command Definitions
+// Keep-Alive Loop
+function startKeepAlive() {
+    const PING_INTERVAL = 4 * 60 * 1000; // 4 minutes
+
+    setInterval(async () => {
+        try {
+            await axios.get(`${RENDER_URL}/`, { timeout: 10000 });
+            console.log(`[KeepAlive] Pinged backend server successfully.`);
+        } catch (err) {
+            console.warn(`[KeepAlive Warning] Could not ping backend: ${err.message}`);
+        }
+    }, PING_INTERVAL);
+}
+
+// Slash Commands
 const commands = [
     new SlashCommandBuilder()
         .setName('v')
@@ -111,38 +129,41 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
 client.once(Events.ClientReady, () => {
     console.log(`[Milky Hub Bot] Online as ${client.user.tag}`);
-    // Start the keepalive system as soon as the bot comes online
     startKeepAlive();
 });
 
+// -------------------------------------------------------------------------
+// 3. SAFE INTERACTION EXECUTION
+// -------------------------------------------------------------------------
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
-    // -------------------------------------------------------------
-    // COMMAND: /v {username}
-    // -------------------------------------------------------------
+    // Safely attempt to defer reply
+    try {
+        if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        }
+    } catch (deferError) {
+        // Unknown interaction (10062) means Discord dropped the request or timed out
+        console.warn(`[Interaction Deferred Failed]: ${deferError.message}`);
+        return; // Abort execution safely without throwing
+    }
+
+    // Command: /v {username}
     if (interaction.commandName === 'v') {
         const robloxUsername = interaction.options.getString('username').trim();
-
-        // Ephemeral flag so only the user who ran the command can see it
-        try {
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        } catch (err) {
-            console.error('Interaction deferral failed (timed out):', err.message);
-            return;
-        }
 
         let rbxUserId = null;
         let rbxDisplayName = null;
 
-        // Step 1: Validate username against Roblox API
+        // Step 1: Check Roblox Username
         try {
             const rbxCheck = await axios.post('https://users.roblox.com/v1/usernames/users', {
                 usernames: [robloxUsername],
                 excludeBannedUsers: true
             }, { timeout: 10000 });
 
-            if (rbxCheck.data && rbxCheck.data.data && rbxCheck.data.data.length > 0) {
+            if (rbxCheck.data?.data?.length > 0) {
                 rbxUserId = rbxCheck.data.data[0].id;
                 rbxDisplayName = rbxCheck.data.data[0].displayName;
             } else {
@@ -152,13 +173,13 @@ client.on(Events.InteractionCreate, async interaction => {
                     .setDescription(`The username **\`${robloxUsername}\`** does not exist on Roblox. Please check your spelling and try again!`)
                     .setFooter({ text: 'Milky Hub Verification' });
 
-                return await interaction.editReply({ embeds: [invalidEmbed] });
+                return await interaction.editReply({ embeds: [invalidEmbed] }).catch(() => {});
             }
         } catch (err) {
-            console.error('Roblox User API Error:', err.message);
+            console.warn('Roblox API Check Warning:', err.message);
         }
 
-        // Step 2: Query Render Backend (45s timeout to allow cold wakeups)
+        // Step 2: Request Backend Verification
         try {
             const response = await axios.post(`${RENDER_URL}/verify`, {
                 username: robloxUsername,
@@ -170,12 +191,11 @@ client.on(Events.InteractionCreate, async interaction => {
                     'Content-Type': 'application/json',
                     'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined
                 },
-                timeout: 45000 // Extended timeout to withstand cold boots
+                timeout: 45000
             });
 
             const data = response.data;
 
-            // Scenario A: Already Verified
             if (data.alreadyVerified || data.status === "already_verified") {
                 const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
                 const msRemaining = expiresAt ? expiresAt.getTime() - Date.now() : null;
@@ -193,10 +213,9 @@ client.on(Events.InteractionCreate, async interaction => {
                     .setFooter({ text: 'Milky Hub Access Control' })
                     .setTimestamp();
 
-                return await interaction.editReply({ embeds: [alreadyEmbed] });
+                return await interaction.editReply({ embeds: [alreadyEmbed] }).catch(() => {});
             }
 
-            // Scenario B: Newly Verified
             if (data.success || data.verified) {
                 const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
                 const msRemaining = expiresAt ? expiresAt.getTime() - Date.now() : null;
@@ -214,40 +233,31 @@ client.on(Events.InteractionCreate, async interaction => {
                     .setFooter({ text: 'Milky Hub Verification' })
                     .setTimestamp();
 
-                return await interaction.editReply({ embeds: [successEmbed] });
+                return await interaction.editReply({ embeds: [successEmbed] }).catch(() => {});
             }
 
-            // Scenario C: Verification Declined
             const failEmbed = new EmbedBuilder()
                 .setTitle(' Verification Issue')
                 .setColor(0xFFAA00)
                 .setDescription(data.message || 'Could not verify your access right now.')
                 .setFooter({ text: 'Milky Hub Verification' });
 
-            return await interaction.editReply({ embeds: [failEmbed] });
+            return await interaction.editReply({ embeds: [failEmbed] }).catch(() => {});
 
         } catch (error) {
             console.error('Backend API Error:', error.message);
             const errorEmbed = new EmbedBuilder()
-                .setTitle(' Backend Connection Timeout')
-                .setColor(0xFF0000)
-                .setDescription('Failed to connect to the backend server (`milkykey.onrender.com`). The server is waking up—please run the command again in 10 seconds!')
+                .setTitle(' Backend Waking Up')
+                .setColor(0xFF8800)
+                .setDescription('The verification server was sleeping. Please run `/v` once more!')
                 .setFooter({ text: 'Milky Hub Engine' });
 
-            return await interaction.editReply({ embeds: [errorEmbed] });
+            return await interaction.editReply({ embeds: [errorEmbed] }).catch(() => {});
         }
     }
 
-    // -------------------------------------------------------------
-    // COMMAND: /admin-stats
-    // -------------------------------------------------------------
+    // Command: /admin-stats
     if (interaction.commandName === 'admin-stats') {
-        try {
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        } catch (err) {
-            return;
-        }
-
         try {
             const statsRes = await axios.get(`${RENDER_URL}/stats`, {
                 headers: { 'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined },
@@ -268,22 +278,14 @@ client.on(Events.InteractionCreate, async interaction => {
                 .setFooter({ text: 'Milky Hub Dashboard' })
                 .setTimestamp();
 
-            await interaction.editReply({ embeds: [dashEmbed] });
+            await interaction.editReply({ embeds: [dashEmbed] }).catch(() => {});
         } catch (err) {
-            await interaction.editReply({ content: 'Could not fetch stats from backend server.' });
+            await interaction.editReply({ content: 'Could not fetch stats from backend server.' }).catch(() => {});
         }
     }
 
-    // -------------------------------------------------------------
-    // COMMAND: /whitelist
-    // -------------------------------------------------------------
+    // Command: /whitelist
     if (interaction.commandName === 'whitelist') {
-        try {
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        } catch (err) {
-            return;
-        }
-
         const targetUser = interaction.options.getString('username').trim();
         const days = interaction.options.getInteger('days') || 30;
 
@@ -302,9 +304,9 @@ client.on(Events.InteractionCreate, async interaction => {
                 .setDescription(`Granted **\`${days}\` days** of access to **\`${targetUser}\`**.`)
                 .setTimestamp();
 
-            await interaction.editReply({ embeds: [wlEmbed] });
+            await interaction.editReply({ embeds: [wlEmbed] }).catch(() => {});
         } catch (err) {
-            await interaction.editReply({ content: `Failed to whitelist user: ${err.message}` });
+            await interaction.editReply({ content: `Failed to whitelist user: ${err.message}` }).catch(() => {});
         }
     }
 });
