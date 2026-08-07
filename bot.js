@@ -22,12 +22,33 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
-// Prevent global process crash from unhandled interaction rejections
+// Fail-safe to prevent unexpected promise rejections from crashing the bot
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('[Safety Net] Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Helper: Format milliseconds into readable duration
+// =========================================================================
+// SELF-PINGING KEEPALIVE ENGINE (Keeps Render Server Awake 24/7)
+// =========================================================================
+function startKeepAlive() {
+    const PING_INTERVAL = 5 * 60 * 1000; // 5 Minutes in milliseconds
+
+    console.log(`[KeepAlive] Initialized self-pinging engine for: ${RENDER_URL}`);
+
+    setInterval(async () => {
+        try {
+            const res = await axios.get(`${RENDER_URL}/`, {
+                timeout: 10000,
+                headers: { 'User-Agent': 'MilkyBot-KeepAlive/1.0' }
+            });
+            console.log(`[KeepAlive Ping] Server pinged successfully! Status: ${res.status} (${new Date().toLocaleTimeString()})`);
+        } catch (err) {
+            console.warn(`[KeepAlive Ping Warning] Server wake ping status: ${err.message}`);
+        }
+    }, PING_INTERVAL);
+}
+
+// Helper: Format milliseconds into readable duration (e.g., "12d 4h 30m")
 function formatTimeRemaining(ms) {
     if (ms <= 0) return "Expired";
     const seconds = Math.floor((ms / 1000) % 60);
@@ -88,9 +109,10 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     }
 })();
 
-// Updated to Events.ClientReady to satisfy deprecation notice
 client.once(Events.ClientReady, () => {
     console.log(`[Milky Hub Bot] Online as ${client.user.tag}`);
+    // Start the keepalive system as soon as the bot comes online
+    startKeepAlive();
 });
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -102,23 +124,23 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.commandName === 'v') {
         const robloxUsername = interaction.options.getString('username').trim();
 
-        // Safely attempt to defer reply using the updated MessageFlags
+        // Ephemeral flag so only the user who ran the command can see it
         try {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         } catch (err) {
-            console.error('Interaction deferral failed (likely timed out):', err.message);
-            return; // Interaction expired, abort execution
+            console.error('Interaction deferral failed (timed out):', err.message);
+            return;
         }
 
         let rbxUserId = null;
         let rbxDisplayName = null;
 
-        // Step 1: Check Roblox API
+        // Step 1: Validate username against Roblox API
         try {
             const rbxCheck = await axios.post('https://users.roblox.com/v1/usernames/users', {
                 usernames: [robloxUsername],
                 excludeBannedUsers: true
-            });
+            }, { timeout: 10000 });
 
             if (rbxCheck.data && rbxCheck.data.data && rbxCheck.data.data.length > 0) {
                 rbxUserId = rbxCheck.data.data[0].id;
@@ -133,10 +155,10 @@ client.on(Events.InteractionCreate, async interaction => {
                 return await interaction.editReply({ embeds: [invalidEmbed] });
             }
         } catch (err) {
-            console.error('Roblox User Check API Error:', err.message);
+            console.error('Roblox User API Error:', err.message);
         }
 
-        // Step 2: Request backend verification status
+        // Step 2: Query Render Backend (45s timeout to allow cold wakeups)
         try {
             const response = await axios.post(`${RENDER_URL}/verify`, {
                 username: robloxUsername,
@@ -148,11 +170,12 @@ client.on(Events.InteractionCreate, async interaction => {
                     'Content-Type': 'application/json',
                     'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined
                 },
-                timeout: 10000
+                timeout: 45000 // Extended timeout to withstand cold boots
             });
 
             const data = response.data;
 
+            // Scenario A: Already Verified
             if (data.alreadyVerified || data.status === "already_verified") {
                 const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
                 const msRemaining = expiresAt ? expiresAt.getTime() - Date.now() : null;
@@ -173,6 +196,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 return await interaction.editReply({ embeds: [alreadyEmbed] });
             }
 
+            // Scenario B: Newly Verified
             if (data.success || data.verified) {
                 const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
                 const msRemaining = expiresAt ? expiresAt.getTime() - Date.now() : null;
@@ -193,6 +217,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 return await interaction.editReply({ embeds: [successEmbed] });
             }
 
+            // Scenario C: Verification Declined
             const failEmbed = new EmbedBuilder()
                 .setTitle(' Verification Issue')
                 .setColor(0xFFAA00)
@@ -204,9 +229,9 @@ client.on(Events.InteractionCreate, async interaction => {
         } catch (error) {
             console.error('Backend API Error:', error.message);
             const errorEmbed = new EmbedBuilder()
-                .setTitle(' Backend Unavailable')
+                .setTitle(' Backend Connection Timeout')
                 .setColor(0xFF0000)
-                .setDescription('Failed to connect to the backend server (`milkykey.onrender.com`). If it was sleeping, try again in 10 seconds.')
+                .setDescription('Failed to connect to the backend server (`milkykey.onrender.com`). The server is waking up—please run the command again in 10 seconds!')
                 .setFooter({ text: 'Milky Hub Engine' });
 
             return await interaction.editReply({ embeds: [errorEmbed] });
@@ -226,7 +251,7 @@ client.on(Events.InteractionCreate, async interaction => {
         try {
             const statsRes = await axios.get(`${RENDER_URL}/stats`, {
                 headers: { 'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined },
-                timeout: 8000
+                timeout: 15000
             });
 
             const s = statsRes.data;
@@ -267,7 +292,8 @@ client.on(Events.InteractionCreate, async interaction => {
                 username: targetUser,
                 days: days
             }, {
-                headers: { 'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined }
+                headers: { 'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined },
+                timeout: 15000
             });
 
             const wlEmbed = new EmbedBuilder()
