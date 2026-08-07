@@ -1,181 +1,65 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, MessageFlags } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
 import axios from 'axios';
-import express from 'express';
 import 'dotenv/config';
 
-// Environment Variables
+// Environment variables
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const RENDER_URL = process.env.RENDER_URL || "https://milkykey.onrender.com";
-const PORT = process.env.PORT || 3000;
+const API_SECRET_KEY = process.env.API_SECRET_KEY || ""; 
 
-// Expiration Duration: 6 Hours in milliseconds
-const VERIFICATION_DURATION_MS = 6 * 60 * 60 * 1000;
-
-// In-memory store for verified users
-// Key: username (lowercase) -> Value: { discordId, verifiedAt, expiresAt }
-const verifiedUsers = new Map();
-
-// ============================================
-// 🌐 HELPER FUNCTIONS
-// ============================================
-
-/**
- * Checks if a Roblox username exists using Roblox's public API.
- * Returns the user object if valid, or null if invalid.
- */
-async function getRobloxUserInfo(username) {
-    try {
-        const response = await axios.post('https://users.roblox.com/v1/usernames/users', {
-            usernames: [username],
-            excludeBannedUsers: false
-        }, { timeout: 5000 });
-
-        if (response.data && response.data.data && response.data.data.length > 0) {
-            return response.data.data[0]; // Returns { id, name, displayName }
-        }
-    } catch (err) {
-        console.error('Roblox API Lookup Error:', err.message);
-    }
-    return null;
-}
-
-/**
- * Formats milliseconds into human-readable hours and minutes.
- */
-function formatTimeRemaining(ms) {
-    const totalMinutes = Math.floor(ms / (1000 * 60));
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-
-    if (hours > 0) {
-        return `${hours}h ${minutes}m`;
-    }
-    return `${minutes}m`;
-}
-
-// ============================================
-// 🌐 EXPRESS WEB SERVER & API ENDPOINTS
-// ============================================
-const app = express();
-app.use(express.json());
-
-app.get('/', (req, res) => {
-    res.send('Milky Hub Verification Server Online');
-});
-
-// Endpoint used by client scripts to check whitelist status
-app.get('/check', (req, res) => {
-    const username = req.query.user;
-    if (!username) {
-        return res.json({ allowed: false, verified: false });
-    }
-
-    const record = verifiedUsers.get(username.toLowerCase());
-    const now = Date.now();
-
-    if (record && now < record.expiresAt) {
-        return res.json({
-            allowed: true,
-            verified: true,
-            expiresInMs: record.expiresAt - now
-        });
-    }
-
-    // Clean up expired record if present
-    if (record && now >= record.expiresAt) {
-        verifiedUsers.delete(username.toLowerCase());
-    }
-
-    return res.json({ allowed: false, verified: false });
-});
-
-// Verification Endpoint called by Discord Bot
-app.post('/verify', async (req, res) => {
-    const { username, discordId } = req.body;
-
-    if (!username) {
-        return res.status(400).json({ success: false, code: 'MISSING_USERNAME', message: 'Username is required.' });
-    }
-
-    const cleanUsername = username.trim();
-    const userKey = cleanUsername.toLowerCase();
-    const now = Date.now();
-
-    // 1. Check if user is already verified and key is still active
-    const existingRecord = verifiedUsers.get(userKey);
-    if (existingRecord && now < existingRecord.expiresAt) {
-        const remainingMs = existingRecord.expiresAt - now;
-        return res.json({
-            success: false,
-            code: 'ALREADY_VERIFIED',
-            message: `Account is already verified!`,
-            timeRemaining: formatTimeRemaining(remainingMs),
-            expiresAt: existingRecord.expiresAt
-        });
-    }
-
-    // 2. Validate Roblox Username via Roblox API
-    const robloxUser = await getRobloxUserInfo(cleanUsername);
-    if (!robloxUser) {
-        return res.status(400).json({
-            success: false,
-            code: 'INVALID_ROBLOX_USER',
-            message: `The Roblox username **"${cleanUsername}"** does not exist.`
-        });
-    }
-
-    // 3. Register standard 6-hour verification
-    const expiresAt = now + VERIFICATION_DURATION_MS;
-    verifiedUsers.set(userKey, {
-        discordId,
-        robloxId: robloxUser.id,
-        exactName: robloxUser.name,
-        verifiedAt: now,
-        expiresAt
-    });
-
-    console.log(`[Verified] ${robloxUser.name} (ID: ${robloxUser.id}) by Discord User ${discordId} for 6 hours.`);
-
-    return res.json({
-        success: true,
-        code: 'VERIFIED',
-        exactName: robloxUser.name,
-        timeRemaining: '6h 0m',
-        expiresAt
-    });
-});
-
-app.listen(PORT, () => {
-    console.log(`[Web Server] Express running on port ${PORT}`);
-});
-
-// Self-ping loop to prevent free-tier inactivity sleeping
-if (RENDER_URL) {
-    setInterval(async () => {
-        try {
-            await axios.get(RENDER_URL);
-        } catch (err) {
-            // Silence network ping errors
-        }
-    }, 4 * 60 * 1000);
-}
-
-// ============================================
-// 🤖 DISCORD BOT INITIALIZATION
-// ============================================
 const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
+// Helper: Format milliseconds into readable duration (e.g., "12d 4h 30m")
+function formatTimeRemaining(ms) {
+    if (ms <= 0) return "Expired";
+    const seconds = Math.floor((ms / 1000) % 60);
+    const minutes = Math.floor((ms / (1000 * 60)) % 60);
+    const hours = Math.floor((ms / (1000 * 60 * 60)) % 24);
+    const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0 && days === 0) parts.push(`${seconds}s`);
+    return parts.join(' ') || '0s';
+}
+
+// Slash Command Definitions
 const commands = [
+    // /v command
     new SlashCommandBuilder()
         .setName('v')
-        .setDescription('Verify your Roblox username for 6 hours of access')
+        .setDescription('Verify or check status for your Roblox username')
         .addStringOption(option =>
             option.setName('username')
                 .setDescription('Your exact Roblox username')
                 .setRequired(true)
+        ),
+    
+    // /admin-stats dashboard command (Admin only)
+    new SlashCommandBuilder()
+        .setName('admin-stats')
+        .setDescription('Dashboard to check active user counts and script usage statistics')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    // /whitelist command to grant keys/time manually (Admin only)
+    new SlashCommandBuilder()
+        .setName('whitelist')
+        .setDescription('Manually whitelist a user or add days')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addStringOption(option =>
+            option.setName('username')
+                .setDescription('Roblox Username')
+                .setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option.setName('days')
+                .setDescription('Number of days to grant access (Default: 30)')
+                .setRequired(false)
         )
 ].map(command => command.toJSON());
 
@@ -183,89 +67,204 @@ const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 
 (async () => {
     try {
-        console.log('Registering slash commands...');
+        console.log('[Milky Bot] Registering application (/) commands...');
         await rest.put(
             Routes.applicationCommands(CLIENT_ID),
             { body: commands }
         );
-        console.log('Slash commands registered successfully.');
+        console.log('[Milky Bot] Slash commands registered successfully!');
     } catch (error) {
-        console.error('Error registering slash commands:', error);
+        console.error('[Milky Bot] Error registering slash commands:', error);
     }
 })();
 
-client.once('clientReady', () => {
-    console.log(`[Bot Engine] Logged in as ${client.user.tag}`);
+client.once('ready', () => {
+    console.log(`[Milky Hub Bot] Online as ${client.user.tag}`);
 });
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
+    // -------------------------------------------------------------
+    // COMMAND: /v {username}
+    // -------------------------------------------------------------
     if (interaction.commandName === 'v') {
         const robloxUsername = interaction.options.getString('username').trim();
 
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        // Enforce private message so only the command runner can see it
+        await interaction.deferReply({ ephemeral: true });
 
+        // Step 1: Validate Roblox username exists via Roblox Official Web API
+        let rbxUserId = null;
+        let rbxDisplayName = null;
+        try {
+            const rbxCheck = await axios.post('https://users.roblox.com/v1/usernames/users', {
+                usernames: [robloxUsername],
+                excludeBannedUsers: true
+            });
+
+            if (rbxCheck.data && rbxCheck.data.data && rbxCheck.data.data.length > 0) {
+                rbxUserId = rbxCheck.data.data[0].id;
+                rbxDisplayName = rbxCheck.data.data[0].displayName;
+            } else {
+                const invalidEmbed = new EmbedBuilder()
+                    .setTitle(' Invalid Roblox Username')
+                    .setColor(0xFF3333)
+                    .setDescription(`The username **\`${robloxUsername}\`** does not exist on Roblox. Please check your spelling and try again!`)
+                    .setFooter({ text: 'Milky Hub Verification' });
+
+                return await interaction.editReply({ embeds: [invalidEmbed] });
+            }
+        } catch (err) {
+            console.error('Roblox User Check API Error:', err.message);
+            // Fallback: Proceed if Roblox API rate limits, but log it
+        }
+
+        // Step 2: Request backend verification status
         try {
             const response = await axios.post(`${RENDER_URL}/verify`, {
                 username: robloxUsername,
-                discordId: interaction.user.id
+                robloxId: rbxUserId,
+                discordId: interaction.user.id,
+                discordTag: interaction.user.tag
             }, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined
+                },
                 timeout: 10000
             });
 
             const data = response.data;
 
-            if (data.success) {
-                const successEmbed = new EmbedBuilder()
-                    .setTitle('✅ Verification Successful!')
-                    .setColor(0x00FF96)
-                    .setDescription(`Account **${data.exactName}** is now verified.`)
+            // Scenario A: User is ALREADY Verified
+            if (data.alreadyVerified || data.status === "already_verified") {
+                const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
+                const msRemaining = expiresAt ? expiresAt.getTime() - Date.now() : null;
+                const timeStr = msRemaining ? formatTimeRemaining(msRemaining) : "Lifetime / Unlimited";
+
+                const alreadyEmbed = new EmbedBuilder()
+                    .setTitle(' Already Verified')
+                    .setColor(0x00D2FF)
+                    .setDescription(`Account **\`${robloxUsername}\`** (${rbxDisplayName || robloxUsername}) is currently active!`)
                     .addFields(
-                        { name: 'Duration', value: '6 Hours', inline: true },
-                        { name: 'Time Remaining', value: data.timeRemaining, inline: true }
+                        { name: ' Remaining Time', value: `\`${timeStr}\``, inline: true },
+                        { name: ' Expiration Date', value: expiresAt ? `<t:${Math.floor(expiresAt.getTime() / 1000)}:F>` : "`Never`", inline: true }
                     )
+                    .setThumbnail(`https://www.roblox.com/headshot-thumbnail/image?userId=${rbxUserId || 1}&width=150&height=150&format=png`)
                     .setFooter({ text: 'Milky Hub Access Control' })
                     .setTimestamp();
 
-                await interaction.editReply({ embeds: [successEmbed] });
+                return await interaction.editReply({ embeds: [alreadyEmbed] });
             }
+
+            // Scenario B: Newly Verified
+            if (data.success || data.verified) {
+                const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;
+                const msRemaining = expiresAt ? expiresAt.getTime() - Date.now() : null;
+                const timeStr = msRemaining ? formatTimeRemaining(msRemaining) : "Lifetime";
+
+                const successEmbed = new EmbedBuilder()
+                    .setTitle(' Access Granted!')
+                    .setColor(0x00FF96)
+                    .setDescription(`Successfully verified **\`${robloxUsername}\`**!`)
+                    .addFields(
+                        { name: ' Time Granted', value: `\`${timeStr}\``, inline: true },
+                        { name: ' Next Step', value: 'Return to Roblox. Your hub will auto-load in seconds!' }
+                    )
+                    .setThumbnail(`https://www.roblox.com/headshot-thumbnail/image?userId=${rbxUserId || 1}&width=150&height=150&format=png`)
+                    .setFooter({ text: 'Milky Hub Verification' })
+                    .setTimestamp();
+
+                return await interaction.editReply({ embeds: [successEmbed] });
+            }
+
+            // Scenario C: General rejection / maintenance from server
+            const failEmbed = new EmbedBuilder()
+                .setTitle(' Verification Issue')
+                .setColor(0xFFAA00)
+                .setDescription(data.message || 'Could not verify your access right now. You may need a key or active subscription.')
+                .setFooter({ text: 'Milky Hub Verification' });
+
+            return await interaction.editReply({ embeds: [failEmbed] });
+
         } catch (error) {
-            if (error.response && error.response.data) {
-                const errData = error.response.data;
+            console.error('Backend API Error:', error.message);
+            const errorEmbed = new EmbedBuilder()
+                .setTitle(' Backend Unavailable')
+                .setColor(0xFF0000)
+                .setDescription('Failed to connect to the backend server (`milkykey.onrender.com`). It might be waking up from sleep mode—try again in 10 seconds.')
+                .setFooter({ text: 'Milky Hub Engine' });
 
-                if (errData.code === 'ALREADY_VERIFIED') {
-                    const alreadyEmbed = new EmbedBuilder()
-                        .setTitle('ℹ️ Already Verified')
-                        .setColor(0x00BFFF)
-                        .setDescription(`Account **${robloxUsername}** is currently active.`)
-                        .addFields(
-                            { name: 'Time Remaining', value: errData.timeRemaining || 'Active', inline: true }
-                        )
-                        .setFooter({ text: 'Milky Hub Access Control' });
+            return await interaction.editReply({ embeds: [errorEmbed] });
+        }
+    }
 
-                    return await interaction.editReply({ embeds: [alreadyEmbed] });
-                }
+    // -------------------------------------------------------------
+    // COMMAND: /admin-stats (Dashboard Overview)
+    // -------------------------------------------------------------
+    if (interaction.commandName === 'admin-stats') {
+        await interaction.deferReply({ ephemeral: true });
 
-                if (errData.code === 'INVALID_ROBLOX_USER') {
-                    const invalidEmbed = new EmbedBuilder()
-                        .setTitle('❌ Invalid Username')
-                        .setColor(0xFF3300)
-                        .setDescription(`The Roblox user **"${robloxUsername}"** could not be found. Please check spelling and try again.`)
-                        .setFooter({ text: 'Milky Hub Access Control' });
+        try {
+            const statsRes = await axios.get(`${RENDER_URL}/stats`, {
+                headers: { 'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined },
+                timeout: 8000
+            });
 
-                    return await interaction.editReply({ embeds: [invalidEmbed] });
-                }
-            }
+            const s = statsRes.data;
 
-            console.error('Verification Error:', error.message);
-            const serverErrEmbed = new EmbedBuilder()
-                .setTitle('⚠️ Verification Error')
-                .setColor(0xFF9900)
-                .setDescription('Failed to complete verification request. Please try again in a few moments.')
-                .setFooter({ text: 'Milky Hub System' });
+            const dashEmbed = new EmbedBuilder()
+                .setTitle(' Milky Hub Live Dashboard')
+                .setColor(0x7289DA)
+                .setDescription('Real-time statistics from the backend server.')
+                .addFields(
+                    { name: ' Total Whitelisted Users', value: `\`${s.totalUsers || 0}\``, inline: true },
+                    { name: ' Active Sessions Now', value: `\`${s.activeNow || 0}\``, inline: true },
+                    { name: ' Executions Today', value: `\`${s.todayExecutions || 0}\``, inline: true },
+                    { name: ' System Status', value: s.maintenance ? ' Maintenance Mode' : ' Online & Operational', inline: false }
+                )
+                .setFooter({ text: 'Milky Hub Dashboard' })
+                .setTimestamp();
 
-            await interaction.editReply({ embeds: [serverErrEmbed] });
+            await interaction.editReply({ embeds: [dashEmbed] });
+        } catch (err) {
+            const errEmbed = new EmbedBuilder()
+                .setTitle(' Dashboard Fetch Failed')
+                .setColor(0xFF0000)
+                .setDescription('Could not fetch stats from backend endpoint `/stats`. Ensure your Render app exposes this route.')
+                .setFooter({ text: 'Milky Hub Dashboard' });
+
+            await interaction.editReply({ embeds: [errEmbed] });
+        }
+    }
+
+    // -------------------------------------------------------------
+    // COMMAND: /whitelist {username} [days]
+    // -------------------------------------------------------------
+    if (interaction.commandName === 'whitelist') {
+        await interaction.deferReply({ ephemeral: true });
+
+        const targetUser = interaction.options.getString('username').trim();
+        const days = interaction.options.getInteger('days') || 30;
+
+        try {
+            const response = await axios.post(`${RENDER_URL}/admin/whitelist`, {
+                username: targetUser,
+                days: days
+            }, {
+                headers: { 'Authorization': API_SECRET_KEY ? `Bearer ${API_SECRET_KEY}` : undefined }
+            });
+
+            const wlEmbed = new EmbedBuilder()
+                .setTitle(' User Whitelisted')
+                .setColor(0x00FF96)
+                .setDescription(`Successfully granted **\`${days}\` days** of access to **\`${targetUser}\`**.`)
+                .setTimestamp();
+
+            await interaction.editReply({ embeds: [wlEmbed] });
+        } catch (err) {
+            await interaction.editReply({ content: `Failed to whitelist user: ${err.message}` });
         }
     }
 });
